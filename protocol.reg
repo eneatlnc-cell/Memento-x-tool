@@ -1,0 +1,22 @@
+Windows Registry Editor Version 5.00
+
+; Memento-x-tool 自定义协议处理器
+; 
+; 将 memento:// 协议关联到 service.py，实现 x-web 一键唤醒本地服务。
+;
+; 安装方式：
+;   1. 双击 protocol.reg 导入注册表
+;   2. 或由 installer.py 自动写入（推荐）
+;
+; 注意：路径中的反斜杠必须转义为 \\，且 .py 文件关联到 pythonw.exe（无控制台窗口）。
+
+[HKEY_CLASSES_ROOT\memento]
+@="URL:Memento Protocol"
+"URL Protocol"=""
+
+[HKEY_CLASSES_ROOT\memento\shell]
+
+[HKEY_CLASSES_ROOT\memento\shell\open]
+
+[HKEY_CLASSES_ROOT\memento\shell\open\command]
+@="pythonw.exe \"%USERPROFILE%\\.memento\\launcher\\service.py\" \"%1\""
