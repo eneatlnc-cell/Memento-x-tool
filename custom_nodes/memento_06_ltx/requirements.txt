@@ -1,0 +1,7 @@
+# memento_06_ltx 依赖
+# LTX-2 原生管线已在 Dockerfile 中安装:
+#   git clone https://github.com/Lightricks/LTX-2.git /opt/ltx2
+#   pip install -e packages/ltx-core -e packages/ltx-pipelines
+torch>=2.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0

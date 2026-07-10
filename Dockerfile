@@ -56,6 +56,14 @@ RUN pip install torch torchvision torchaudio --index-url https://download.pytorc
 # 用户在 HuggingFace facebook/sam3 申请访问权限后通过 download_models.sh 下载
 RUN pip install sam3 --no-build-isolation
 
+# ── 安装 LTX-2 原生管线（用于节点 6 LTX-Video 2.3 + IC-LoRA） ──
+# 注意：LTX-2 使用原生 ltx-pipelines（非 diffusers）
+# IC-LoRA 通过 LoraPathStrengthAndSDOps 加载，无需 peft
+RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git /opt/ltx2 \
+    && cd /opt/ltx2 \
+    && pip install -e packages/ltx-core --no-build-isolation \
+    && pip install -e packages/ltx-pipelines --no-build-isolation
+
 # ── 复制模型权重（预下载好的） ──
 COPY ./models/ "$MODELS_DIR/"
 
