@@ -22,56 +22,58 @@ Memento 是一个面向专业影视创作者的 AI 影视 VFX 系统。
 
 ## 二、仓库清单（3 个活跃仓库）
 
-| 仓库 | 定位 | 技术栈 | 状态 |
-|------|------|--------|------|
-| [Memento-X](https://github.com/eneatlnc-cell/Memento-X) | ★ 云端 JSON 调度中枢 | Python(FastAPI) | ✅ 核心就绪，ECS 已部署 |
-| [Memento-x-web](https://github.com/eneatlnc-cell/Memento-x-web) | 网站操作界面（魔改 ComfyUI 前端） | HTML/JS（ComfyUI 前端骨架） | ⚠️ 待魔改 |
-| [Memento-x-tool](https://github.com/eneatlnc-cell/Memento-x-tool) | 启动器（ComfyUI headless + custom_nodes） | Python + ComfyUI | ⚠️ 待构建 |
-| [Memento-Sol](https://github.com/eneatlnc-cell/Memento-Sol) | ~~手机端采集~~ | Kotlin + Jetpack Compose | 🔒 暂缓 |
+| 仓库 | 定位 | 技术栈 | 部署方 | 状态 |
+|------|------|--------|--------|------|
+| [Memento-X](https://github.com/eneatlnc-cell/Memento-X) | ★ 云端 JSON 调度中枢 | Python(FastAPI) | 我们（ECS） | ✅ 已部署 |
+| [Memento-x-web](https://github.com/eneatlnc-cell/Memento-x-web) | 网站操作界面（魔改 ComfyUI 前端） | HTML/JS（ComfyUI 前端骨架） | 我们（域名） | ⚠️ 待魔改 |
+| [Memento-x-tool](https://github.com/eneatlnc-cell/Memento-x-tool) | 启动器（ComfyUI headless + custom_nodes） | Python + ComfyUI | 用户自己 | ⚠️ 待构建 |
+| [Memento-Sol](https://github.com/eneatlnc-cell/Memento-Sol) | ~~手机端采集~~ | Kotlin + Jetpack Compose | - | 🔒 暂缓 |
 
 ---
 
 ## 三、三层架构与数据流
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    用户浏览器                                     │
-│                  https://memento.xxx                              │
-└──────────────────────┬──────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                    用户浏览器                                   │
+│                  https://memento.xxx                            │
+└──────────────────────┬────────────────────────────────────────┘
                        │ 访问网站
                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Memento-x-web（网站 — 魔改 ComfyUI 前端骨架）                    │
-│  • 保留：WebSocket 通信、文件上传/下载、队列管理、进度推送          │
-│  • 移除：节点画布、连线编辑器、模型选择器                          │
-│  • 替换为：极简三步界面（选素材 → 选目标 → 点执行）                │
-│  • 部署：静态网站，挂载到域名                                     │
-└──────────────────────┬──────────────────────────────────────────┘
-                       │ 发送 JSON 工作流 + Token
+┌───────────────────────────────────────────────────────────────┐
+│  Memento-x-web（网站 — 魔改 ComfyUI 前端骨架）                  │
+│  • 保留：WebSocket 通信、文件上传/下载、队列管理、进度推送        │
+│  • 移除：节点画布、连线编辑器、模型选择器                        │
+│  • 替换为：极简三步界面（选素材 → 选目标 → 点执行）              │
+│  • 部署：静态网站，挂载到域名                                   │
+│  • 部署方：我们                                                │
+└──────────────────────┬────────────────────────────────────────┘
+                       │ 发送 JSON 指令 + Token
                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Memento-X（云端 JSON 调度中枢）                                  │
-│  • 账户系统：JWT 认证、注册/登录、配额管理                         │
-│  • 任务调度：意图理解 → 工作流 JSON 生成 → 派发到 GPU 节点         │
-│  • 算力管理：GPU 节点注册、心跳、在线池管理                        │
-│  • 混合算力：云端 GPU + 用户本地 GPU 智能分发                      │
-│  • 状态推送：WebSocket 透传到 Web 端                              │
-│  • 硬性规则：不接收、不存储、不转发任何视频/图片/模型文件           │
-│  • 只传输：文本、ID、JSON 指令、状态信息                           │
-└──────────────────────┬──────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  Memento-X（云端 JSON 调度中枢）                                │
+│  • 账户系统：JWT 认证、注册/登录、配额管理                       │
+│  • 任务调度：意图理解 → 工作流 JSON 生成 → 派发到用户启动器      │
+│  • 状态推送：WebSocket 透传到 Web 端                            │
+│  • 硬性规则：不接收、不存储、不转发任何视频/图片/模型文件         │
+│  • 只传输：文本、ID、JSON 指令、状态信息                         │
+│  • 部署方：我们（ECS）                                         │
+└──────────────────────┬────────────────────────────────────────┘
                        │ 派发工作流 JSON
                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Memento-x-tool（启动器 — ComfyUI headless + custom_nodes）       │
-│  • 部署形态：云端 GPU 容器集群 或 用户本地一键启动                  │
-│  • 底层：ComfyUI headless（CUDA 适配、多卡显存管理、模型生命周期）  │
-│  • 业务：custom_nodes 中实现 Memento 9 节点管线                    │
-│  • 文件：唯一存储层（素材缓存、中间产物、成品输出）                  │
-│  • 安全：文件访问反向鉴权（防盗链）                                │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  Memento-x-tool（启动器 — ComfyUI headless + custom_nodes）     │
+│  • 用户自己部署：本地 PC 或自己买的云端 GPU                      │
+│  • 底层：ComfyUI headless（CUDA 适配、多卡显存管理、模型生命周期）│
+│  • 业务：custom_nodes 中实现 Memento 9 节点管线                  │
+│  • 文件：唯一存储层（素材缓存、中间产物、成品输出）                │
+│  • 部署方：用户自己                                            │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-**数据流总结**：`用户浏览器 → x-web(网站) → Memento-X(调度) → x-tool(GPU启动器)`
+**数据流总结**：`用户浏览器 → x-web(网站) → Memento-X(调度) → x-tool(用户自己的GPU启动器)`
+
+**我们**：网站 + 云端中枢。**用户**：启动器。
 
 ---
 
@@ -84,7 +86,7 @@ x-web 生成标准化指令 {action, target, source_asset, target_asset}
     ↓
 Memento-X 意图理解引擎 → 转换为工作流 JSON
     ↓
-Memento-X 混合算力智能分发 → 派发到 x-tool GPU 节点
+Memento-X 派发到 x-tool 启动器
     ↓
 x-tool（ComfyUI headless）运行 9 节点管线 → 渲染成片
     ↓
@@ -156,14 +158,14 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 | 方法 | 端点 | 用途 |
 |------|------|------|
 | POST | `/api/v1/workflow/generate` | 生成工作流 JSON |
-| POST | `/api/v1/workflow/dispatch` | 派发到 GPU 节点 |
+| POST | `/api/v1/workflow/dispatch` | 派发到启动器 |
 | GET | `/api/v1/workflow/status/{id}` | 查询任务状态 |
 | GET | `/api/v1/workflow/result/{id}` | 获取成片结果 |
 | GET | `/api/v1/workflow/tasks` | 列出用户任务 |
-| POST | `/api/v1/workflow/node/register` | GPU 节点注册 |
-| POST | `/api/v1/workflow/node/unregister` | GPU 节点注销 |
-| POST | `/api/v1/workflow/node/heartbeat` | GPU 节点心跳 |
-| GET | `/api/v1/workflow/node/status/{user_id}` | 查询 GPU 节点状态 |
+| POST | `/api/v1/workflow/launcher/register` | 启动器注册（上线） |
+| POST | `/api/v1/workflow/launcher/unregister` | 启动器注销（下线） |
+| POST | `/api/v1/workflow/launcher/heartbeat` | 启动器心跳 |
+| GET | `/api/v1/workflow/launcher/status/{user_id}` | 查询启动器状态 |
 | GET | `/api/v1/workflow/queue/status` | 查询调度器队列状态 |
 
 ### 7.4 通知
@@ -176,9 +178,9 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 | 方法 | 端点 | 用途 |
 |------|------|------|
 | WS | `/api/v1/status/ws` | WebSocket 实时状态推送 |
-| POST | `/api/v1/status/report` | GPU 节点状态上报 |
+| POST | `/api/v1/status/report` | 启动器状态上报 |
 | GET | `/api/v1/status/connections` | WebSocket 连接数 |
-| GET | `/api/v1/status/nodes` | GPU 节点注册列表 |
+| GET | `/api/v1/status/launchers` | 启动器注册列表 |
 
 ---
 
@@ -192,7 +194,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 6. 用户操作：选素材 → 选目标 → 点执行（三步完成）
 7. Memento-x-web 是唯一操作界面（网站，非安装包）
 8. 界面极简：像 Instagram 滤镜一样简单，不像 ComfyUI 那样暴露管线
-9. 启动器完全由云端控制，没有操作界面
+9. 启动器完全由用户自己部署和运行，我们不提供云端 GPU 算力
 10. **ComfyUI 仅作为底层壳**：不暴露原生前端，不暴露节点系统给用户
 11. **工具链 = 不可变镜像**：ComfyUI + custom_nodes 整体打包为 Docker 镜像，版本锁定，禁止自动更新
 
@@ -200,12 +202,12 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 
 ## 九、当前开发状态
 
-| 组件 | 状态 | 说明 |
-|------|------|------|
-| Memento-X cloud | ✅ 已部署 | ECS 118.31.189.101:8000，M8-M10 完成 |
-| Memento-x-web | ⚠️ 待魔改 | 基于 ComfyUI 前端骨架改版 |
-| Memento-x-tool | ⚠️ 待构建 | ComfyUI headless + custom_nodes |
-| Memento-Sol | 🔒 暂缓 | 非 MVP 瓶颈 |
+| 组件 | 部署方 | 状态 | 说明 |
+|------|--------|------|------|
+| Memento-X cloud | 我们（ECS） | ✅ 已部署 | ECS 118.31.189.101:8000，M8-M10 完成 |
+| Memento-x-web | 我们（域名） | ⚠️ 待魔改 | 基于 ComfyUI 前端骨架改版 |
+| Memento-x-tool | 用户自己 | ⚠️ 待构建 | ComfyUI headless + custom_nodes，用户自己部署在本地/云端GPU |
+| Memento-Sol | - | 🔒 暂缓 | 非 MVP 瓶颈 |
 
 ---
 
@@ -224,7 +226,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 
 ### 阶段三：界面与分发（M13-M15）— 约 3-4 周
 - **M13 网站魔改**：ComfyUI 前端骨架 → 极简三步网站（移除画布，替换为三步操作）
-- **M14 混合算力**：云端 GPU + 本地 GPU 智能分发 + 多任务并行
+- **M14 多任务并行**：启动器本地队列 + GPU 显存调度
 - **M15 工具链镜像**：Docker 构建 + Docker Hub 发布 (mementoweb)
 
 ### 阶段四：生产就绪（M16-M17）— 约 2-3 周
@@ -249,7 +251,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 1. **ComfyUI 前端魔改**：不从头开发 Web 界面，复用 ComfyUI 前端骨架（WebSocket、文件传输、队列、进度），移除画布，替换为三步极简界面
 2. **ComfyUI 作为算力底座**：不自研底层 CUDA/显存/多卡适配，ComfyUI headless + custom_nodes 承载全部管线
 3. **Memento-x-web 是网站**：不是 Electron 安装包，是纯 Web 网站，用户打开浏览器即可使用
-4. **Memento-x-tool 是启动器**：可部署在云端 GPU 或用户本地 GPU，混合算力池智能分发
+4. **Memento-x-tool 是启动器**：用户自己部署在本地 PC 或自己买的云端 GPU，我们不提供算力，不建算力池
 5. **术语统一**：`matting`/`抠图` → `scene_edit`/`场景编辑`
 6. **注册策略**：统一在 Web 端注册
 7. **测试账号**：13800000001~3 / 验证码 888888
@@ -258,7 +260,6 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 10. **战略调整**：App 暂缓，主攻三大核心仓库
 11. **界面哲学**：像 Instagram 滤镜一样简单，不像 ComfyUI 那样暴露管线
 12. **管线升级**：SAM2→SAM3，RIFE→RAFT，新增 MotionBERT 3D 归一化 + QuadMask 四通道编码 + Wan3-DiT+VACE3 影视级重绘
-13. **混合算力**：平台零算力成本，用户可用自有 GPU 或云端 GPU
 
 ---
 
@@ -278,7 +279,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 ## 十四、目录结构约定
 
 ```
-~/.memento/                    # GPU 节点工作目录
+~/.memento/                    # 启动器工作目录（用户 GPU 机器上）
 ├── assets/                    # 素材缓存（按 asset_id 组织）
 ├── workspace/                 # 工作目录
 ├── context_buffer/            # 窗口化流处理上下文缓存
