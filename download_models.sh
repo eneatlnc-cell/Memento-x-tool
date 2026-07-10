@@ -60,7 +60,7 @@ log "下载 LTX-Video 2.3 主模型 (约 10GB，FP8 量化)..."
 retry python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='Lightricks/LTX-Video',
+    repo_id='Lightricks/LTX-2.3-fp8',
     filename='ltx-2.3-22b-dev-fp8.safetensors',
     local_dir='$MODEL_DIR/ltx',
     local_dir_use_symlinks=False,
