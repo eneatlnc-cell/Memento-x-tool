@@ -92,15 +92,18 @@ hf_hub_download(
 done
 log "IC-LoRA 全部控制模型 ✓"
 
-# ── 7. RAFT (HuggingFace) ──
-log "下载 RAFT..."
+# ── 7. RAFT 光流模型 (torchvision 预训练权重) ──
+log "预下载 RAFT 光流模型权重..."
+# torchvision 的 raft_large C_T_V2 权重会自动下载到 torch hub 缓存
+# 这里手动触发下载，确保构建镜像时已缓存
 retry python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    'pytorch/raft_large',
-    local_dir='$MODEL_DIR/raft',
-    local_dir_use_symlinks=False
+import torch
+import torchvision
+print('预加载 RAFT Large 模型权重...')
+model = torchvision.models.optical_flow.raft_large(
+    weights=torchvision.models.optical_flow.Raft_Large_Weights.C_T_V2
 )
+print('RAFT 权重下载完成')
 " && log "RAFT ✓" || { log "RAFT 下载失败"; exit 1; }
 
 # ── 完成 ──

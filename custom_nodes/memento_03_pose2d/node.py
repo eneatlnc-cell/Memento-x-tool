@@ -1,6 +1,12 @@
-"""Memento 03 — MediaPipe 2D 骨骼提取节点
+"""Memento 03 — MediaPipe 33点 2D人体姿态检测
 
-输入: 帧序列 + 掩码目录 → 输出: 33 关键点 JSON（仅 mask 区域）
+输入: 01 原始 30fps 帧 + 02 人物 Mask
+输出: Pose 骨骼热力图（每帧一张热力图 PNG）
+
+结合 Mask 过滤干扰:
+  - Mask 外区域涂黑后检测 → 消除背景人物干扰
+  - 关键点落在 Mask 外 → visibility=0
+  - 骨骼热力图仅在 Mask 区域内绘制
 """
 import logging
 import json
@@ -15,9 +21,21 @@ logger = logging.getLogger(__name__)
 
 mp_pose = mp.solutions.pose
 
+# ── MediaPipe 33 关键点间的骨架连线 ──
+SKELETON_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 7),    # 鼻→左眼→左眼内→左耳
+    (0, 4), (4, 5), (5, 6), (6, 8),    # 鼻→右眼→右眼外→右耳
+    (9, 10),                             # 嘴
+    (11, 12), (11, 13), (13, 15),       # 左肩→左肘→左腕
+    (12, 14), (14, 16),                  # 右肩→右肘→右腕
+    (11, 23), (12, 24), (23, 24),       # 肩→髋
+    (23, 25), (25, 27), (27, 29), (29, 31),  # 左腿
+    (24, 26), (26, 28), (28, 30), (30, 32),  # 右腿
+]
+
 
 class MementoPose2D:
-    """节点 3: 2D 骨骼 — MediaPipe 33 关键点提取（仅在 mask 区域检测）"""
+    """节点 3: 2D 骨骼 — MediaPipe 33 关键点 + 骨骼热力图"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -27,16 +45,16 @@ class MementoPose2D:
                 "mask_dir": ("STRING", {"default": "", "multiline": False}),
                 "min_detection_confidence": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "min_tracking_confidence": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "heatmap_sigma": ("FLOAT", {"default": 6.0, "min": 1.0, "max": 20.0, "step": 1.0}),
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("pose_json_path",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("pose_json_path", "heatmap_dir")
     FUNCTION = "extract"
     CATEGORY = "Memento/03_Pose2D"
 
     def load_mask(self, mask_path: str, target_h: int, target_w: int) -> np.ndarray | None:
-        """加载掩码，如果文件不存在返回 None"""
         if not os.path.exists(mask_path):
             return None
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
@@ -47,13 +65,7 @@ class MementoPose2D:
         return mask
 
     def keypoints_to_dict(self, landmarks, frame_w: int, frame_h: int) -> dict:
-        """将 MediaPipe landmarks 转为归一化 JSON 格式"""
-        kp = {
-            "x": [],
-            "y": [],
-            "z": [],
-            "visibility": [],
-        }
+        kp = {"x": [], "y": [], "z": [], "visibility": []}
         for lm in landmarks.landmark:
             kp["x"].append(round(lm.x, 6))
             kp["y"].append(round(lm.y, 6))
@@ -61,8 +73,62 @@ class MementoPose2D:
             kp["visibility"].append(round(lm.visibility, 6))
         return kp
 
-    def extract(self, frames_dir: str, mask_dir: str, min_detection_confidence: float, min_tracking_confidence: float):
-        logger.info(f"[MementoPose2D] frames: {frames_dir}, masks: {mask_dir}")
+    def generate_pose_heatmap(self, keypoints: dict, mask: np.ndarray | None,
+                               h: int, w: int, sigma: float) -> np.ndarray:
+        """
+        从关键点生成骨骼热力图（仅在 Mask 区域内绘制）
+
+        - 对每个可见关键点，画高斯热斑
+        - 对每条骨架连线，画线段高斯热斑
+        - 最终用 Mask 裁切，Mask 外置零
+        """
+        heatmap = np.zeros((h, w), dtype=np.float32)
+
+        xs = keypoints["x"]
+        ys = keypoints["y"]
+        vis = keypoints["visibility"]
+
+        # 高斯核生成辅助函数
+        def add_gaussian(x: float, y: float, weight: float = 1.0):
+            px = int(x * w)
+            py = int(y * h)
+            if px < 0 or px >= w or py < 0 or py >= h:
+                return
+            ys_grid, xs_grid = np.ogrid[:h, :w]
+            gauss = np.exp(-((xs_grid - px)**2 + (ys_grid - py)**2) / (2 * sigma**2))
+            np.maximum(heatmap, gauss * weight, out=heatmap)
+
+        # 绘制关键点热斑
+        for i in range(len(xs)):
+            if vis[i] > 0.3:
+                add_gaussian(xs[i], ys[i], vis[i])
+
+        # 绘制骨架连线热斑（沿线段采样）
+        for conn in SKELETON_CONNECTIONS:
+            i, j = conn
+            if i < len(xs) and j < len(xs) and vis[i] > 0.3 and vis[j] > 0.3:
+                for t in np.linspace(0, 1, 20):
+                    px = xs[i] * (1 - t) + xs[j] * t
+                    py = ys[i] * (1 - t) + ys[j] * t
+                    add_gaussian(px, py, 0.5)
+
+        # Mask 裁切
+        if mask is not None:
+            _, mask_bin = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+            heatmap[mask_bin == 0] = 0
+
+        # 归一化到 [0, 255]
+        if heatmap.max() > 0:
+            heatmap = (heatmap / heatmap.max() * 255).astype(np.uint8)
+        return heatmap.astype(np.uint8)
+
+    def extract(self, frames_dir: str, mask_dir: str,
+                min_detection_confidence: float, min_tracking_confidence: float,
+                heatmap_sigma: float):
+        logger.info(
+            f"[MementoPose2D] frames: {frames_dir}, masks: {mask_dir}, "
+            f"sigma={heatmap_sigma}"
+        )
 
         if not os.path.exists(frames_dir):
             raise FileNotFoundError(f"帧目录不存在: {frames_dir}")
@@ -76,7 +142,9 @@ class MementoPose2D:
 
         # 创建输出目录
         pose_dir = "/workspace/pose"
+        heatmap_dir = "/workspace/pose_heatmap"
         Path(pose_dir).mkdir(parents=True, exist_ok=True)
+        Path(heatmap_dir).mkdir(parents=True, exist_ok=True)
 
         first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
         h, w = first_frame.shape[:2]
@@ -105,7 +173,7 @@ class MementoPose2D:
                 mask_path = os.path.join(mask_dir, mask_name)
                 mask = self.load_mask(mask_path, h, w)
 
-                # 在 mask 区域内做检测：mask 外区域涂黑
+                # Mask 区域外涂黑 → 消除背景人物干扰
                 if mask is not None:
                     masked_frame = frame_rgb.copy()
                     masked_frame[mask == 0] = 0
@@ -114,10 +182,11 @@ class MementoPose2D:
                     results = pose.process(frame_rgb)
 
                 frame_key = f"frame_{i+1:05d}"
+
                 if results.pose_landmarks:
                     valid_kp = self.keypoints_to_dict(results.pose_landmarks, w, h)
 
-                    # 过滤掉不在 mask 区域内的关键点
+                    # 过滤 Mask 外的关键点
                     if mask is not None:
                         for j in range(len(valid_kp["x"])):
                             px = int(valid_kp["x"][j] * w)
@@ -127,13 +196,19 @@ class MementoPose2D:
                                     valid_kp["visibility"][j] = 0.0
 
                     all_keypoints[frame_key] = valid_kp
+
+                    # 生成骨骼热力图
+                    heatmap = self.generate_pose_heatmap(valid_kp, mask, h, w, heatmap_sigma)
                 else:
                     all_keypoints[frame_key] = {
-                        "x": [0.0] * 33,
-                        "y": [0.0] * 33,
-                        "z": [0.0] * 33,
-                        "visibility": [0.0] * 33,
+                        "x": [0.0] * 33, "y": [0.0] * 33,
+                        "z": [0.0] * 33, "visibility": [0.0] * 33,
                     }
+                    heatmap = np.zeros((h, w), dtype=np.uint8)
+
+                # 保存热力图
+                heatmap_path = os.path.join(heatmap_dir, f"heatmap_{i+1:05d}.png")
+                cv2.imwrite(heatmap_path, heatmap)
 
                 if (i + 1) % 30 == 0:
                     logger.info(f"[MementoPose2D] 进度: {i+1}/{len(frame_files)} 帧")
@@ -152,6 +227,7 @@ class MementoPose2D:
 
         context.update({
             "pose_json_path": pose_json_path,
+            "heatmap_dir": heatmap_dir,
             "num_pose_frames": len(all_keypoints),
             "keypoint_count": 33,
         })
@@ -159,12 +235,14 @@ class MementoPose2D:
         with open(context_path, "w") as f:
             json.dump(context, f, indent=2)
 
-        detected_frames = sum(1 for v in all_keypoints.values() if v["visibility"][0] > 0)
+        detected_frames = sum(
+            1 for v in all_keypoints.values() if v["visibility"][0] > 0
+        )
         logger.info(
             f"[MementoPose2D] 完成: {detected_frames}/{len(all_keypoints)} 帧检测到姿势, "
-            f"输出到 {pose_json_path}"
+            f"热力图输出到 {heatmap_dir}"
         )
-        return (pose_json_path,)
+        return (pose_json_path, heatmap_dir)
 
 
 NODE_CLASS_MAPPINGS = {"MementoPose2D": MementoPose2D}

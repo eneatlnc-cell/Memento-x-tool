@@ -8,8 +8,8 @@
 FROM nvidia/cuda:12.1-runtime-ubuntu22.04
 
 LABEL org.memento.name="Memento-x-tool"
-LABEL org.memento.version="v1.0.0"
-LABEL org.memento.description="ComfyUI headless + 9-node VFX pipeline (LTX-Video 2.3 + IC-LoRA)"
+LABEL org.memento.version="v2.0.0"
+LABEL org.memento.description="ComfyUI headless + 9-node VFX pipeline: Preprocess → SAM3 → MediaPipe → MotionBERT → Align → LTX-Inpaint → RAFT → Fusion → Composite"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -49,7 +49,7 @@ RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$COMFYUI_
 # ── 安装 ComfyUI 依赖 ──
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
     && pip install -r "$COMFYUI_DIR/requirements.txt" \
-    && pip install mediapipe huggingface_hub opencv-python-headless numpy Pillow
+    && pip install mediapipe huggingface_hub opencv-python-headless numpy Pillow scipy opencv-contrib-python-headless
 
 # ── 安装 SAM3（pip 安装） ──
 # 注意：SAM3 模型权重需要提前下载到 /models/sam3/sam3.safetensors
