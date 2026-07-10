@@ -31,17 +31,19 @@ retry() {
 log "安装 huggingface_hub..."
 pip install --quiet huggingface_hub
 
-# ── 2. SAM3-Large (HuggingFace) ──
-log "下载 SAM3-Large..."
+# ── 2. SAM3 (HuggingFace) ──
+log "下载 SAM3 模型权重..."
+# 注意：SAM3 需要先在 HuggingFace 上申请访问权限
+# https://huggingface.co/facebook/sam3
 retry python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
-    'facebook/sam2-hiera-large',
+    'facebook/sam3',
     local_dir='$MODEL_DIR/sam3',
     local_dir_use_symlinks=False,
-    ignore_patterns=['*.msgpack']
+    allow_patterns=['sam3.safetensors', '*.json', '*.txt', '*.yaml']
 )
-" && log "SAM3-Large ✓" || { log "SAM3 下载失败"; exit 1; }
+" && log "SAM3 ✓" || { log "SAM3 下载失败"; exit 1; }
 
 # ── 3. MediaPipe ──
 log "安装 MediaPipe (无权重文件，仅 pip)..."

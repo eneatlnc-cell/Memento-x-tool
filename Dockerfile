@@ -51,10 +51,10 @@ RUN pip install torch torchvision torchaudio --index-url https://download.pytorc
     && pip install -r "$COMFYUI_DIR/requirements.txt" \
     && pip install mediapipe huggingface_hub opencv-python-headless numpy Pillow
 
-# ── 安装 SAM2（从 GitHub 克隆） ──
-RUN git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2 \
-    && cd /opt/sam2 && pip install -e . --no-build-isolation \
-    && cp /opt/sam2/sam2/configs/sam2_hiera_l.yaml /models/sam3/ 2>/dev/null || true
+# ── 安装 SAM3（pip 安装） ──
+# 注意：SAM3 模型权重需要提前下载到 /models/sam3/sam3.safetensors
+# 用户在 HuggingFace facebook/sam3 申请访问权限后通过 download_models.sh 下载
+RUN pip install sam3 --no-build-isolation
 
 # ── 复制模型权重（预下载好的） ──
 COPY ./models/ "$MODELS_DIR/"
