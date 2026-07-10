@@ -1,0 +1,4 @@
+# memento_03_pose2d 依赖
+mediapipe>=0.10.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0

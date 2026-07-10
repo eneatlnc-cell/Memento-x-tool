@@ -1,0 +1,6 @@
+# memento_02_segment 依赖
+# SAM2 已在 Dockerfile 中从 GitHub 安装
+torch>=2.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+Pillow>=9.0.0

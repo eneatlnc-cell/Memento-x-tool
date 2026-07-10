@@ -1,0 +1,25 @@
+{
+  "_comment": "Memento 管线上下文。所有节点从此文件读取输入路径，并将输出路径追加到此文件。",
+  "_pipeline_order": "01_preprocess → 02_segment → 03_pose2d → 04_pose3d → 05_quadmask → 06_ltx → 07_raft → 08_grading → 09_export",
+
+  "input_video": "/workspace/input/demo.mp4",
+  "click_points": [
+    {"x": 960, "y": 540, "label": 1}
+  ],
+
+  "frames_dir": "",
+  "video_fps": 30,
+  "total_frames": 0,
+  "resolution": "",
+  "original_width": 0,
+  "original_height": 0,
+
+  "mask_dir": "",
+  "num_masks": 0,
+  "mask_width": 0,
+  "mask_height": 0,
+
+  "pose_json_path": "",
+  "num_pose_frames": 0,
+  "keypoint_count": 33
+}

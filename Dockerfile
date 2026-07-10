@@ -49,7 +49,12 @@ RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$COMFYUI_
 # ── 安装 ComfyUI 依赖 ──
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
     && pip install -r "$COMFYUI_DIR/requirements.txt" \
-    && pip install mediapipe huggingface_hub opencv-python-headless
+    && pip install mediapipe huggingface_hub opencv-python-headless numpy Pillow
+
+# ── 安装 SAM2（从 GitHub 克隆） ──
+RUN git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2 \
+    && cd /opt/sam2 && pip install -e . --no-build-isolation \
+    && cp /opt/sam2/sam2/configs/sam2_hiera_l.yaml /models/sam3/ 2>/dev/null || true
 
 # ── 复制模型权重（预下载好的） ──
 COPY ./models/ "$MODELS_DIR/"
