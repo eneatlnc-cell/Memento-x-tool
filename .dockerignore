@@ -1,0 +1,16 @@
+*.pyc
+__pycache__/
+.pytest_cache/
+.git/
+*.log
+download_models.log
+models/
+*.tar.gz
+*.zip
+build_*.log
+ERROR_REPORT.md
+.DS_Store
+venv/
+.venv/
+env/
+*.egg-info/
