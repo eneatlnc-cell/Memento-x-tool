@@ -106,7 +106,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 | 3. 2D 骨骼 | MediaPipe | 33 关键点提取 |
 | 4. 3D 归一化 | MotionBERT | 3D 人体姿态归一化，防抖动 |
 | 5. 四通道编码 | QuadMask（自研） | 四通道特征编码，多人物深度分层 |
-| 6. 影视级重绘 | Wan3-DiT + VACE3 | 核心 AI 生成，身份锁定 |
+| 6. 影视级重绘 | LTX-Video 2.3 + IC-LoRA | 核心 AI 生成，内置姿态/掩码/深度控制，无需外挂 ControlNet |
 | 7. 稠密光流 | RAFT | 时序矫正，亚像素级边缘稳定 |
 | 8. 光影调色 | 分层调色融合 | 环境光/阴影/高光匹配 |
 | 9. 4K 输出 | FFmpeg | 帧序列 → MP4/MOV，支持 EXR 分层 |
@@ -259,7 +259,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 9. **AIGC 定位**：差异化在于**可控性**（坐标驱动确定性合成），而非操作难度
 10. **战略调整**：App 暂缓，主攻三大核心仓库
 11. **界面哲学**：像 Instagram 滤镜一样简单，不像 ComfyUI 那样暴露管线
-12. **管线升级**：SAM2→SAM3，RIFE→RAFT，新增 MotionBERT 3D 归一化 + QuadMask 四通道编码 + Wan3-DiT+VACE3 影视级重绘
+12. **管线升级**：SAM2→SAM3，RIFE→RAFT，新增 MotionBERT 3D 归一化 + QuadMask 四通道编码 + LTX-Video 2.3 + IC-LoRA 多特征融合渲染（内置姿态/掩码/深度控制，无需外挂 ControlNet）
 
 ---
 

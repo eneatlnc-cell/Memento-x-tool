@@ -10,7 +10,7 @@ MODEL_DIR="./models"
 MAX_RETRIES=3
 LOG_FILE="./download_models.log"
 
-mkdir -p "$MODEL_DIR"/{sam3,mediapipe,motionbert,wan3,vace3,raft}
+mkdir -p "$MODEL_DIR"/{sam3,mediapipe,motionbert,ltx,iclora,raft}
 
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 retry() {
@@ -54,24 +54,41 @@ MOTIONBERT_URL="https://github.com/Walter0807/MotionBERT/releases/download/v1.0.
 retry wget -q --show-progress -O "$MODEL_DIR/motionbert/motionbert_ft_h36m.pth" "$MOTIONBERT_URL" \
     && log "MotionBERT ✓" || { log "MotionBERT 下载失败"; exit 1; }
 
-# ── 5. Wan3-DiT (HuggingFace) ──
-log "下载 Wan3-DiT (约 14GB，耗时较长)..."
+# ── 5. LTX-Video 2.3 主模型 (HuggingFace) ──
+log "下载 LTX-Video 2.3 主模型 (约 10GB，FP8 量化)..."
+# 主模型: ltx-2.3-22b-dev-fp8.safetensors ~10GB
 retry python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    'Wan-AI/Wan2.1-T2V-14B',
-    local_dir='$MODEL_DIR/wan3',
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id='Lightricks/LTX-Video',
+    filename='ltx-2.3-22b-dev-fp8.safetensors',
+    local_dir='$MODEL_DIR/ltx',
     local_dir_use_symlinks=False,
-    ignore_patterns=['*.msgpack', '*.safetensors.index.json']
 )
-" && log "Wan3-DiT ✓" || { log "Wan3 下载失败"; exit 1; }
+" && log "LTX-Video 2.3 主模型 ✓" || { log "LTX-Video 2.3 下载失败"; exit 1; }
 
-# ── 6. VACE3 ──
-log "VACE3: 检查是否开源..."
-VACE3_STATUS="NOT_OPEN_SOURCE"
-log "VACE3 当前非开源模型，留空目录 $MODEL_DIR/vace3/"
-echo "$VACE3_STATUS" > "$MODEL_DIR/vace3/STATUS.txt"
-log "VACE3 ⚠ (留空，待后续确认)"
+# ── 6. IC-LoRA 控制模型 (HuggingFace) ──
+log "下载 IC-LoRA 控制模型 (共约 25GB，pose+depth+canny)..."
+ICLORA_MODELS=(
+    "Lightricks/LTX-Video-ICLoRA-pose:ltx-video-iclora-pose-13b-0.9.7.safetensors"
+    "Lightricks/LTX-Video-ICLoRA-depth:ltx-video-iclora-depth-13b-0.9.7.safetensors"
+    "Lightricks/LTX-Video-ICLoRA-canny:ltx-video-iclora-canny-13b-0.9.7.safetensors"
+)
+for entry in "${ICLORA_MODELS[@]}"; do
+    repo="${entry%%:*}"
+    filename="${entry##*:}"
+    log "  下载 $filename ..."
+    retry python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id='$repo',
+    filename='$filename',
+    local_dir='$MODEL_DIR/iclora',
+    local_dir_use_symlinks=False,
+)
+" && log "  $filename ✓" || { log "IC-LoRA 下载失败: $filename"; exit 1; }
+done
+log "IC-LoRA 全部控制模型 ✓"
 
 # ── 7. RAFT (HuggingFace) ──
 log "下载 RAFT..."

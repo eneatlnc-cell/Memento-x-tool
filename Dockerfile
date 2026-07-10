@@ -9,7 +9,7 @@ FROM nvidia/cuda:12.1-runtime-ubuntu22.04
 
 LABEL org.memento.name="Memento-x-tool"
 LABEL org.memento.version="v1.0.0"
-LABEL org.memento.description="ComfyUI headless + 9-node VFX pipeline"
+LABEL org.memento.description="ComfyUI headless + 9-node VFX pipeline (LTX-Video 2.3 + IC-LoRA)"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
