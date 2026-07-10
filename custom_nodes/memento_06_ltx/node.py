@@ -2,7 +2,16 @@
 
 基于原生 ltx-pipelines ICLoraPipeline（非 diffusers）。
 IC-LoRA 通过 LoraPathStrengthAndSDOps 原生加载，无需 peft。
-控制信号：Pose 热力图 + Depth 深度图 + Canny/Distance/Temporal 控制包 → MP4。
+
+控制信号来源（8路输入）:
+  - 01_frames_dir      → 来自 01 原始 30fps 帧
+  - 02_mask_dir        → 来自 02 SAM3 视频分割（人物 Mask）
+  - 03_heatmap_dir     → 来自 03 MediaPipe 2D 骨骼热力图（Pose 控制）
+  - 04_depth_dir       → 来自 04 MotionBERT 深度图（Depth 控制）
+  - 05_control_pack_dir → 来自 05 对齐控制（Canny/Distance/Temporal 控制包）
+  - 06_reference_dir   → 角色 B 参考图像（5 视角）
+  - 07_prompt          → 文本提示词（描述角色 B 外观）
+  - 08_metadata_json   → 原始视频元数据（fps, width, height, duration）
 
 核心行为：
 - 背景保持原始不变（通过 mask 合成）
@@ -33,6 +42,15 @@ from .control_extractor import (
 
 logger = logging.getLogger(__name__)
 
+# ── 尝试导入 memento_pipeline.ops.sub GPU 张量操作 ──
+try:
+    from memento_pipeline.ops.sub import ltx_inpaint as _ops_ltx_inpaint
+    _TENSOR_OPS_AVAILABLE = True
+    logger.info("[MementoLTX] memento_pipeline.ops.sub 已加载，将使用 GPU 张量操作")
+except ImportError:
+    _TENSOR_OPS_AVAILABLE = False
+    logger.info("[MementoLTX] memento_pipeline.ops.sub 未安装，使用文件级回退逻辑")
+
 # ── LTX-2 原生导入（Dockerfile 中预安装） ──
 try:
     from ltx_pipelines.ic_lora import ICLoraPipeline
@@ -42,6 +60,22 @@ try:
 except ImportError as e:
     logger.warning(f"[MementoLTX] LTX-2 原生管线未安装: {e}")
     _LTX_AVAILABLE = False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 控制信号来源文档
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CONTROL_SOURCES = (
+    "Mask            → 来自 02 SAM3 视频分割 (人物区域)\n"
+    "Pose (Heatmap)  → 来自 03 MediaPipe 2D 骨骼热力图\n"
+    "Depth           → 来自 04 MotionBERT 深度图\n"
+    "Canny/Distance  → 来自 05 对齐控制 (Canny边缘 + Distance距离图)\n"
+    "Temporal        → 来自 05 时序平滑参数\n"
+    "Reference       → 角色 B 参考图像 (5视角)\n"
+    "Prompt          → 文本提示词 (描述角色 B 外观)\n"
+    "Metadata        → 原始视频元数据 (fps, width, height)"
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -360,7 +394,17 @@ def prepare_reference_tensor(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MementoLTX:
-    """节点 6: 局部重绘 — LTX-Video 2.3 + IC-LoRA 原生控制
+    """节点 6: 局部重绘 — LTX-Video 2.3 + IC-LoRA 原生控制 (8路输入)
+
+    8路输入信号:
+      - 01 原始帧 (背景保持)
+      - 02 Mask (来自 SAM3)
+      - 03 Pose 热力图 (来自 MediaPipe)
+      - 04 Depth 深度图 (来自 MotionBERT)
+      - 05 Canny/Distance/Temporal 控制包 (来自 05 对齐)
+      - 06 角色 B 参考图像 (5 视角)
+      - 07 文本提示词
+      - 08 元数据 JSON
 
     使用 LTX-2 原生 ICLoraPipeline：
     - 主模型: /models/ltx/ltx-2.3-22b-dev-fp8.safetensors
@@ -384,6 +428,9 @@ class MementoLTX:
     # 管线缓存: key=(control_mode, control_strength) → pipeline 实例
     # 不同控制模式需要不同的 IC-LoRA 组合，因此按组合缓存
     _pipeline_cache: Dict[Tuple[str, float], object] = {}
+
+    # 是否使用 GPU 张量操作
+    _use_tensor_ops = _TENSOR_OPS_AVAILABLE
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -461,6 +508,13 @@ class MementoLTX:
                     "max": 2**32 - 1,
                     "step": 1,
                     "tooltip": "随机种子（固定种子可复现结果）",
+                }),
+            },
+            "hidden": {
+                "control_sources": ("STRING", {
+                    "default": CONTROL_SOURCES,
+                    "multiline": True,
+                    "tooltip": "8路控制信号来源说明（文档用途）",
                 }),
             },
         }
@@ -622,10 +676,136 @@ class MementoLTX:
         return h, w, len(frame_files)
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # 主生成函数
+    # GPU 张量操作路径
     # ═══════════════════════════════════════════════════════════════════════════
 
-    def generate(
+    def _generate_tensor_ops(self, frames_dir, mask_dir, heatmap_dir, depth_dir,
+                              control_pack_dir, reference_dir, prompt, metadata_json,
+                              control_mode, control_strength, num_inference_steps, seed):
+        """使用 memento_pipeline.ops.sub.ltx_inpaint 进行 GPU 张量操作"""
+        if not _TENSOR_OPS_AVAILABLE:
+            raise RuntimeError("memento_pipeline.ops.sub 不可用，无法使用张量操作路径")
+
+        total_start = time.time()
+        logger.info("=" * 60)
+        logger.info("[MementoLTX] ====== 局部重绘开始 (tensor ops) ======")
+
+        # 验证所有输入路径
+        required_paths = {
+            "01_frames_dir": frames_dir,
+            "02_mask_dir": mask_dir,
+            "03_heatmap_dir": heatmap_dir,
+            "04_depth_dir": depth_dir,
+            "05_control_pack_dir": control_pack_dir,
+            "06_reference_dir": reference_dir,
+        }
+        for name, path in required_paths.items():
+            if not path or not path.strip():
+                raise ValueError(f"[MementoLTX] {name} 未设置，请提供有效的目录路径")
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"[MementoLTX] {name} 不存在: {path}")
+
+        metadata = parse_metadata(metadata_json)
+        h, w, num_frames = self.get_frame_info(frames_dir)
+
+        # 加载帧为张量 (N, 3, H, W) float32 [0, 1]
+        frame_files = sorted([
+            f for f in os.listdir(frames_dir)
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+        frames_np = []
+        for fn in frame_files[:num_frames]:
+            img = cv2.imread(os.path.join(frames_dir, fn))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            frames_np.append(img)
+        frames_np = np.stack(frames_np, axis=0)
+        frames_t = torch.from_numpy(frames_np.astype(np.float32) / 255.0).permute(0, 3, 1, 2)
+
+        # 加载掩码为张量 (N, 1, H, W) float32 [0, 1]
+        mask_files = sorted([
+            f for f in os.listdir(mask_dir)
+            if f.lower().endswith('.png')
+        ])
+        masks_np = np.zeros((num_frames, h, w), dtype=np.float32)
+        for i in range(min(num_frames, len(mask_files))):
+            m = cv2.imread(os.path.join(mask_dir, mask_files[i]), cv2.IMREAD_GRAYSCALE)
+            if m is not None:
+                if m.shape[:2] != (h, w):
+                    m = cv2.resize(m, (w, h))
+                masks_np[i] = m.astype(np.float32) / 255.0
+        masks_t = torch.from_numpy(masks_np).unsqueeze(1)
+
+        # 加载控制包为张量 (N, 4, H, W) float32 [0, 1]
+        control_files = sorted([
+            f for f in os.listdir(control_pack_dir)
+            if f.lower().endswith('.png')
+        ])
+        control_np = np.zeros((num_frames, 4, h, w), dtype=np.float32)
+        for i in range(min(num_frames, len(control_files))):
+            cp = cv2.imread(os.path.join(control_pack_dir, control_files[i]), cv2.IMREAD_UNCHANGED)
+            if cp is not None:
+                if cp.shape[:2] != (h, w):
+                    cp = cv2.resize(cp, (w, h))
+                if cp.ndim == 2:
+                    cp = cp[:, :, None]
+                for c in range(min(4, cp.shape[2])):
+                    control_np[i, c] = cp[:, :, c].astype(np.float32) / 255.0
+        control_t = torch.from_numpy(control_np)
+
+        # 设置 metadata dict 包含 control_mode
+        metadata_dict = {
+            "fps": metadata["fps"],
+            "width": w,
+            "height": h,
+            "control_mode": control_mode,
+        }
+
+        # 调用 ops.sub.ltx_inpaint
+        synthetic_t = _ops_ltx_inpaint(
+            frames=frames_t,
+            masks=masks_t,
+            control_pack=control_t,
+            reference_dir=reference_dir,
+            prompt=prompt,
+            metadata=metadata_dict,
+            control_strength=control_strength,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+        )  # (N, 3, H, W) float32 [0, 1]
+
+        # 创建输出目录
+        synthetic_dir = "/workspace/synthetic"
+        Path(synthetic_dir).mkdir(parents=True, exist_ok=True)
+        for old_file in Path(synthetic_dir).glob("synth_*.png"):
+            old_file.unlink()
+
+        # 保存合成帧
+        synthetic_np = synthetic_t.cpu().numpy()  # (N, 3, H, W)
+        saved_count = 0
+        for i in range(num_frames):
+            frame = synthetic_np[i].transpose(1, 2, 0)  # (H, W, 3)
+            frame = np.clip(frame * 255, 0, 255).astype(np.uint8)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            out_path = os.path.join(synthetic_dir, f"synth_{i+1:05d}.png")
+            cv2.imwrite(out_path, frame)
+            saved_count += 1
+
+        total_elapsed = time.time() - total_start
+        logger.info(
+            f"[MementoLTX] (tensor ops) 完成: {saved_count} 帧合成成功, "
+            f"总耗时 {total_elapsed:.1f}s"
+        )
+
+        # 更新 context.json
+        self._update_context(synthetic_dir, saved_count, control_mode, control_strength,
+                             reference_dir, num_inference_steps, seed, w, h, prompt, metadata, total_elapsed)
+        return (synthetic_dir,)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 文件级回退路径
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _generate_file_based(
         self,
         frames_dir: str,           # 01_frames_dir
         mask_dir: str,             # 02_mask_dir
@@ -640,7 +820,7 @@ class MementoLTX:
         num_inference_steps: int,
         seed: int,
     ):
-        """执行局部重绘生成。
+        """执行局部重绘生成（文件级回退路径）。
 
         完整流程：
         1. 验证所有输入路径的存在性
@@ -659,7 +839,7 @@ class MementoLTX:
         """
         total_start = time.time()
         logger.info("=" * 60)
-        logger.info("[MementoLTX] ====== 局部重绘开始 ======")
+        logger.info("[MementoLTX] ====== 局部重绘开始 (file-based) ======")
         logger.info(f"  帧目录:       {frames_dir}")
         logger.info(f"  掩码目录:     {mask_dir}")
         logger.info(f"  热力图目录:   {heatmap_dir}")
@@ -947,6 +1127,26 @@ class MementoLTX:
             )
 
         # ── 步骤 10: 更新 context.json ──
+        self._update_context(synthetic_dir, saved_count, control_mode, control_strength,
+                             reference_dir, num_inference_steps, seed, w, h, prompt, metadata, total_elapsed)
+
+        logger.info(
+            f"[MementoLTX] ====== 局部重绘完成! ======\n"
+            f"  合成帧输出: {synthetic_dir}\n"
+            f"  生成帧数:   {saved_count}\n"
+            f"  背景策略:   保持原始（通过 mask 合成）\n"
+            f"  控制模式:   {control_mode}\n"
+            f"  参考图像:   {len(reference_images)} 张"
+        )
+
+        return (synthetic_dir,)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # context.json 更新
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _update_context(self, synthetic_dir, saved_count, control_mode, control_strength,
+                        reference_dir, num_inference_steps, seed, w, h, prompt, metadata, total_elapsed):
         context_path = "/workspace/context.json"
         context = {}
         if os.path.exists(context_path):
@@ -963,14 +1163,12 @@ class MementoLTX:
             "num_synthetic_frames": saved_count,
             "control_mode": control_mode,
             "control_strength": control_strength,
-            "num_reference_images": len(reference_images),
+            "num_reference_images": len(os.listdir(reference_dir)) if os.path.isdir(reference_dir) else 0,
             "reference_dir": reference_dir,
-            "inference_time_sec": round(infer_elapsed, 1),
-            "inference_fps": round(fps_render, 2),
+            "inference_time_sec": round(total_elapsed, 1),
             "total_time_sec": round(total_elapsed, 1),
             "original_resolution": f"{w}x{h}",
-            "aligned_resolution": f"{w_a}x{h_a}",
-            "original_fps": original_fps,
+            "original_fps": metadata["fps"],
             "num_inference_steps": num_inference_steps,
             "seed": seed,
             "inpainting_mode": True,
@@ -982,25 +1180,57 @@ class MementoLTX:
 
         logger.info(f"[MementoLTX] context.json 已更新: {context_path}")
 
-        # ── 步骤 11: 显存报告 ──
-        if torch.cuda.is_available():
-            mem_peak = torch.cuda.max_memory_allocated() / (1024 ** 3)
-            mem_reserved = torch.cuda.max_memory_reserved() / (1024 ** 3)
-            logger.info(
-                f"[MementoLTX] 峰值显存: allocated={mem_peak:.2f} GB, "
-                f"reserved={mem_reserved:.2f} GB"
-            )
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 主生成函数
+    # ═══════════════════════════════════════════════════════════════════════════
 
+    def generate(
+        self,
+        frames_dir: str,           # 01_frames_dir
+        mask_dir: str,             # 02_mask_dir
+        heatmap_dir: str,          # 03_heatmap_dir
+        depth_dir: str,            # 04_depth_dir
+        control_pack_dir: str,     # 05_control_pack_dir
+        reference_dir: str,        # 06_reference_dir
+        prompt: str,               # 07_prompt
+        metadata_json: str,        # 08_metadata_json
+        control_mode: str,
+        control_strength: float,
+        num_inference_steps: int,
+        seed: int,
+        control_sources: str = "",  # hidden parameter — documentation only
+    ):
+        """执行局部重绘生成。
+
+        优先使用 memento_pipeline.ops.sub.ltx_inpaint GPU 张量操作，
+        如果不可用或失败则回退到文件级逻辑。
+
+        Returns:
+            (synthetic_dir,) — 合成帧输出目录的路径字符串
+        """
         logger.info(
-            f"[MementoLTX] ====== 局部重绘完成! ======\n"
-            f"  合成帧输出: {synthetic_dir}\n"
-            f"  生成帧数:   {saved_count}\n"
-            f"  背景策略:   保持原始（通过 mask 合成）\n"
-            f"  控制模式:   {control_mode}\n"
-            f"  参考图像:   {len(reference_images)} 张"
+            f"[MementoLTX] generate: tensor_ops={self._use_tensor_ops}, "
+            f"mode={control_mode}, strength={control_strength}"
         )
 
-        return (synthetic_dir,)
+        if self._use_tensor_ops and _TENSOR_OPS_AVAILABLE:
+            try:
+                return self._generate_tensor_ops(
+                    frames_dir, mask_dir, heatmap_dir, depth_dir,
+                    control_pack_dir, reference_dir, prompt, metadata_json,
+                    control_mode, control_strength, num_inference_steps, seed,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[MementoLTX] GPU 张量操作失败: {e}，回退到文件级逻辑"
+                )
+                logger.debug(traceback.format_exc())
+
+        return self._generate_file_based(
+            frames_dir, mask_dir, heatmap_dir, depth_dir,
+            control_pack_dir, reference_dir, prompt, metadata_json,
+            control_mode, control_strength, num_inference_steps, seed,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1009,5 +1239,5 @@ class MementoLTX:
 
 NODE_CLASS_MAPPINGS = {"MementoLTX": MementoLTX}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MementoLTX": "Memento 06 - LTX-Video 2.3 + IC-LoRA 局部重绘 (Inpainting)"
+    "MementoLTX": "Memento 06 - LTX 局部重绘 (8路输入)"
 }

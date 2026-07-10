@@ -1,31 +1,62 @@
 """
-Memento 08 — Layered Lighting/Color Fusion Node
-=================================================
-Performs seamless compositing of foreground onto background using
-4-layer masks, color matching, and depth-aware shadow adjustment.
+Memento 08 — Layered Lighting/Color Fusion Node (无冗余背景)
+===============================================================
 
-Outputs unified, lighting-consistent composite frames.
+输入:
+  - flow_aligned_dir: 07 光流矫正帧 (来自 RAFT 矫正，已保留背景)
+  - mask_dir:         02 分层遮罩 (来自 SAM3，4 层 SVG mask)
+  - depth_dir:        04 深度图 (来自 MotionBERT)
+
+说明:
+  - 07 光流矫正帧已保留原始背景，无需额外传入 01 原始背景素材
+  - 融合策略: 4 层遮罩 + 颜色匹配 + 深度感知阴影调整
+
+4 层遮罩策略:
+  Layer 0 (foreground) : 直接替换 (mask > 0.5)
+  Layer 1 (feather)    : 高斯模糊 alpha 混合
+  Layer 2 (detail)     : 拉普拉斯金字塔边缘保持混合
+  Layer 3 (semitrans)  : Screen 混合模式
+
+颜色匹配: 直方图匹配前景区到背景边界区域
+深度感知阴影: 深度越大 → 阴影越暗 (0.5~1.0 倍乘)
 """
 
 import os
 import glob
+import logging
+
 import numpy as np
 import cv2
 
+logger = logging.getLogger(__name__)
+
+# ── 尝试导入 memento_pipeline.ops.sub GPU 张量操作 ──
+try:
+    from memento_pipeline.ops.sub import fusion_blend as _ops_fusion_blend
+    _TENSOR_OPS_AVAILABLE = True
+    logger.info("[MementoFusion] memento_pipeline.ops.sub 已加载，将使用 GPU 张量操作")
+except ImportError:
+    _TENSOR_OPS_AVAILABLE = False
+    logger.info("[MementoFusion] memento_pipeline.ops.sub 未安装，使用文件级回退逻辑")
+
 
 class MementoFusion:
-    """ComfyUI custom node: Memento 08 — Layered Lighting/Color Fusion.
+    """ComfyUI custom node: Memento 08 — 分层光影融合 (无冗余背景)
 
-    Merges warped foreground frames onto original backgrounds using
-    a 4-layer mask strategy:
+    输入: 07 光流矫正帧 + 02 分层遮罩 + 04 深度图
+    (无需原始背景，07 已保留)
+
+    融合 07 光流矫正帧，使用 4 层遮罩策略:
       Layer 0 (foreground) : direct replacement
       Layer 1 (feather)    : alpha blending with gaussian weight
       Layer 2 (detail)     : edge-preserving Poisson-style blending
       Layer 3 (semitrans)  : screen blend mode
 
-    Color matching and depth-based shadow adjustment are applied
-    before the final composite.
+    颜色匹配和深度感知阴影调整在最终合成前应用。
     """
+
+    # 是否使用 GPU 张量操作
+    _use_tensor_ops = _TENSOR_OPS_AVAILABLE
 
     def __init__(self):
         pass
@@ -38,11 +69,6 @@ class MementoFusion:
                     "default": "",
                     "multiline": False,
                     "placeholder": "Path to 07 optical-flow corrected frames"
-                }),
-                "frames_dir": ("STRING", {
-                    "default": "",
-                    "multiline": False,
-                    "placeholder": "Path to 01 original frames (background)"
                 }),
                 "mask_dir": ("STRING", {
                     "default": "",
@@ -59,7 +85,7 @@ class MementoFusion:
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("final_frames_dir",)
-    FUNCTION = "fuse"
+    FUNCTION = "blend"
     CATEGORY = "Memento/08_Fusion"
 
     # ------------------------------------------------------------------
@@ -320,17 +346,100 @@ class MementoFusion:
         return np.clip(corrected, 0, 1)
 
     # ------------------------------------------------------------------
-    # Main fusion pipeline
+    # GPU 张量操作路径
     # ------------------------------------------------------------------
 
-    def fuse(self, flow_aligned_dir, frames_dir, mask_dir, depth_dir):
-        """Run the full fusion pipeline.
+    def _blend_tensor_ops(self, flow_aligned_dir, mask_dir, depth_dir):
+        """使用 memento_pipeline.ops.sub.fusion_blend 进行 GPU 张量操作"""
+        if not _TENSOR_OPS_AVAILABLE:
+            raise RuntimeError("memento_pipeline.ops.sub 不可用，无法使用张量操作路径")
 
-        Returns the path to the directory containing final composite frames.
-        """
+        import torch
+
+        aligned_paths = self._sorted_image_files(flow_aligned_dir)
+        mask_paths = self._sorted_image_files(mask_dir)
+        depth_paths = self._sorted_image_files(depth_dir)
+
+        if not aligned_paths:
+            raise ValueError(
+                f"No image files found in flow_aligned_dir: {flow_aligned_dir}"
+            )
+
+        num_frames = len(aligned_paths)
+        logger.info(f"[MementoFusion] (tensor ops) Found {num_frames} aligned frames")
+
+        # 加载第一帧获取尺寸
+        first = self._load_image(aligned_paths[0])
+        if first is None:
+            raise RuntimeError(f"无法读取第一帧: {aligned_paths[0]}")
+        H, W = first.shape[:2]
+
+        # 加载所有帧为张量 (N, 3, H, W) float32 [0, 1]
+        frames_np = []
+        for i in range(num_frames):
+            fg = self._load_image(aligned_paths[i])
+            if fg is None:
+                fg = np.zeros((H, W, 3), dtype=np.float32)
+            elif fg.shape[:2] != (H, W):
+                fg = cv2.resize(fg, (W, H))
+            frames_np.append(fg)
+        frames_np = np.stack(frames_np, axis=0)  # (N, H, W, 3)
+        frames_t = torch.from_numpy(frames_np.astype(np.float32)).permute(0, 3, 1, 2)  # (N, 3, H, W)
+
+        # 加载所有掩码为张量 (N, 1, H, W) float32 [0, 1]
+        masks_np = np.zeros((num_frames, H, W), dtype=np.float32)
+        for i in range(min(num_frames, len(mask_paths))):
+            m = self._load_image(mask_paths[i], grayscale=True)
+            if m is not None:
+                if m.shape[:2] != (H, W):
+                    m = cv2.resize(m, (W, H))
+                masks_np[i] = m
+        masks_t = torch.from_numpy(masks_np).unsqueeze(1)  # (N, 1, H, W)
+
+        # 加载所有深度图为张量 (N, 1, H, W) float32 [0, 1]
+        depth_np = np.zeros((num_frames, H, W), dtype=np.float32)
+        for i in range(min(num_frames, len(depth_paths))):
+            d = self._load_image(depth_paths[i], grayscale=True)
+            if d is not None:
+                if d.shape[:2] != (H, W):
+                    d = cv2.resize(d, (W, H))
+                depth_np[i] = d
+        depth_t = torch.from_numpy(depth_np).unsqueeze(1)  # (N, 1, H, W)
+
+        # 调用 ops.sub.fusion_blend
+        final_frames_t = _ops_fusion_blend(
+            synthetic_frames=frames_t,
+            masks=masks_t,
+            depth_maps=depth_t,
+        )  # (N, 3, H, W) float32 [0, 1]
+
+        # 创建输出目录
+        base_out = os.path.dirname(os.path.normpath(flow_aligned_dir))
+        output_dir = os.path.join(base_out, "08_final_frames")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 保存结果
+        final_np = final_frames_t.cpu().numpy()  # (N, 3, H, W)
+        for i in range(num_frames):
+            frame = final_np[i].transpose(1, 2, 0)  # (H, W, 3)
+            frame = np.clip(frame, 0, 1)
+            out_path = os.path.join(output_dir, f"frame_{i:06d}.png")
+            self._save_image(out_path, frame)
+
+            if (i + 1) % max(1, num_frames // 10) == 0 or i == num_frames - 1:
+                logger.info(f"[MementoFusion] (tensor ops) Processed {i + 1}/{num_frames} frames")
+
+        logger.info(f"[MementoFusion] (tensor ops) Done. Output: {output_dir}")
+        return (output_dir,)
+
+    # ------------------------------------------------------------------
+    # 文件级回退路径
+    # ------------------------------------------------------------------
+
+    def _blend_file_based(self, flow_aligned_dir, mask_dir, depth_dir):
+        """使用文件级逻辑进行分层光影融合（无冗余背景）"""
         # --- Gather input files ---
         aligned_paths = self._sorted_image_files(flow_aligned_dir)
-        bg_paths      = self._sorted_image_files(frames_dir)
         mask_paths    = self._sorted_image_files(mask_dir)
         depth_paths   = self._sorted_image_files(depth_dir)
 
@@ -338,17 +447,12 @@ class MementoFusion:
             raise ValueError(
                 f"No image files found in flow_aligned_dir: {flow_aligned_dir}"
             )
-        if not bg_paths:
-            raise ValueError(
-                f"No image files found in frames_dir: {frames_dir}"
-            )
 
         num_frames = len(aligned_paths)
 
-        print(f"[MementoFusion] Found {num_frames} aligned frames")
-        print(f"[MementoFusion] Found {len(bg_paths)} background frames")
-        print(f"[MementoFusion] Found {len(mask_paths)} mask files")
-        print(f"[MementoFusion] Found {len(depth_paths)} depth maps")
+        logger.info(f"[MementoFusion] (file-based) Found {num_frames} aligned frames")
+        logger.info(f"[MementoFusion] (file-based) Found {len(mask_paths)} mask files")
+        logger.info(f"[MementoFusion] (file-based) Found {len(depth_paths)} depth maps")
 
         # --- Create output directory ---
         base_out = os.path.dirname(os.path.normpath(flow_aligned_dir))
@@ -357,24 +461,17 @@ class MementoFusion:
 
         # --- Process each frame ---
         for idx in range(num_frames):
-            # Load foreground (aligned)
+            # Load foreground (aligned) — 07 输出已保留背景
             fg = self._load_image(aligned_paths[idx])
             if fg is None:
-                print(f"[MementoFusion] WARNING: skipping frame {idx} — "
-                      f"cannot load {aligned_paths[idx]}")
+                logger.warning(f"[MementoFusion] WARNING: skipping frame {idx} — "
+                              f"cannot load {aligned_paths[idx]}")
                 continue
 
-            # Load background
-            bg = self._load_image(bg_paths[min(idx, len(bg_paths) - 1)])
-            if bg is None:
-                print(f"[MementoFusion] WARNING: skipping frame {idx} — "
-                      f"cannot load background")
-                continue
-
-            # Ensure same resolution
             h, w = fg.shape[:2]
-            if bg.shape[:2] != (h, w):
-                bg = cv2.resize(bg, (w, h), interpolation=cv2.INTER_LINEAR)
+
+            # 07 输出已保留背景，bg 就是 fg 本身
+            bg = fg.copy()
 
             # Load depth map
             depth_map = None
@@ -442,10 +539,38 @@ class MementoFusion:
             self._save_image(out_path, final)
 
             if (idx + 1) % max(1, num_frames // 10) == 0 or idx == num_frames - 1:
-                print(f"[MementoFusion] Processed {idx + 1}/{num_frames} frames")
+                logger.info(f"[MementoFusion] (file-based) Processed {idx + 1}/{num_frames} frames")
 
-        print(f"[MementoFusion] Done. Output: {output_dir}")
+        logger.info(f"[MementoFusion] (file-based) Done. Output: {output_dir}")
         return (output_dir,)
+
+    # ------------------------------------------------------------------
+    # 主入口
+    # ------------------------------------------------------------------
+
+    def blend(self, flow_aligned_dir, mask_dir, depth_dir):
+        """Run the full fusion pipeline.
+
+        输入: 07 光流矫正帧 + 02 分层遮罩 + 04 深度图
+        (无需原始背景，07 已保留)
+
+        Returns the path to the directory containing final composite frames.
+        """
+        logger.info(
+            f"[MementoFusion] blend: flow_aligned={flow_aligned_dir}, "
+            f"mask={mask_dir}, depth={depth_dir}, "
+            f"tensor_ops={self._use_tensor_ops}"
+        )
+
+        if self._use_tensor_ops and _TENSOR_OPS_AVAILABLE:
+            try:
+                return self._blend_tensor_ops(flow_aligned_dir, mask_dir, depth_dir)
+            except Exception as e:
+                logger.warning(
+                    f"[MementoFusion] GPU 张量操作失败: {e}，回退到文件级逻辑"
+                )
+
+        return self._blend_file_based(flow_aligned_dir, mask_dir, depth_dir)
 
 
 # ------------------------------------------------------------------
@@ -457,5 +582,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MementoFusion": "Memento 08 — Fusion",
+    "MementoFusion": "Memento 08 - 分层光影融合 (无冗余背景)",
 }

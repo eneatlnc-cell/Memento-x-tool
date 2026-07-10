@@ -5,11 +5,27 @@ Combines the final composited frame sequence with the original audio
 track into a single 4K video file using FFmpeg.
 
 Handles the case where audio is missing by producing a silent video.
+
+When memento_pipeline.ops.sub.composite_video is available, core logic
+is delegated to the tensor-based implementation.
 """
 
 import os
 import subprocess
 import glob
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ── Tensor ops 导入 ──
+_use_tensor_ops = False
+_tensor_composite_video = None
+try:
+    from memento_pipeline.ops.sub import composite_video as _tensor_composite_video
+    _use_tensor_ops = True
+    logger.info("[MementoComposite] 已加载 memento_pipeline.ops.sub.composite_video，将使用 tensor ops 路径")
+except ImportError as e:
+    logger.info(f"[MementoComposite] memento_pipeline.ops.sub 不可用 ({e})，将使用文件级 fallback 路径")
 
 
 class MementoComposite:
@@ -167,10 +183,10 @@ class MementoComposite:
             return os.path.getsize(audio_path) > 0
 
     # ------------------------------------------------------------------
-    # Main composite pipeline
+    # Tensor ops composite path
     # ------------------------------------------------------------------
 
-    def composite(
+    def _composite_tensor_ops(
         self,
         final_frames_dir,
         audio_path,
@@ -178,15 +194,119 @@ class MementoComposite:
         original_width,
         original_height,
     ):
-        """Encode the final video.
+        """使用 memento_pipeline.ops.sub.composite_video 的 tensor ops 路径。"""
+        import torch
+        import cv2
+        import numpy as np
 
-        Returns the absolute path to the output .mp4 file.
-        """
-        # --- Validate inputs ---
-        if not final_frames_dir or not os.path.isdir(final_frames_dir):
-            raise ValueError(
-                f"final_frames_dir is not a valid directory: {final_frames_dir}"
+        logger.info("[MementoComposite] ====== 使用 Tensor Ops 路径 (memento_pipeline.ops.sub.composite_video) ======")
+
+        # --- Gather input files ---
+        exts = ("*.png", "*.jpg", "*.jpeg", "*.tiff", "*.tif", "*.bmp")
+        frame_files = []
+        for ext in exts:
+            frame_files.extend(glob.glob(os.path.join(final_frames_dir, ext)))
+        frame_files.sort()
+
+        if not frame_files:
+            raise ValueError(f"No image files found in {final_frames_dir}")
+
+        num_frames = len(frame_files)
+        print(f"[MementoComposite] Found {num_frames} frames in {final_frames_dir}")
+
+        # --- Load first frame to determine resolution ---
+        first = cv2.imread(frame_files[0])
+        if first is None:
+            raise ValueError(f"Cannot load first frame: {frame_files[0]}")
+        h, w = first.shape[:2]
+
+        # --- Load all frames as tensors ---
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        frames_np = []
+        for path in frame_files:
+            img = cv2.imread(path)
+            if img is None:
+                raise ValueError(f"Cannot load frame: {path}")
+            if img.shape[:2] != (h, w):
+                img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
+            frames_np.append(img)
+
+        # BGR uint8 -> RGB float32 [0,1] (N, 3, H, W)
+        frames_tensor = torch.from_numpy(
+            np.stack([cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in frames_np]).astype(np.float32) / 255.0
+        ).permute(0, 3, 1, 2).to(device)
+
+        print(f"[MementoComposite] Frames tensor: {frames_tensor.shape}, device={device}")
+
+        # --- Build metadata dict ---
+        metadata = {
+            "fps": float(original_fps),
+            "width": int(original_width),
+            "height": int(original_height),
+        }
+
+        # --- Determine output path ---
+        base_out = os.path.dirname(os.path.normpath(final_frames_dir))
+        output_video_path = os.path.join(base_out, "09_final_output.mp4")
+
+        # --- Call tensor ops ---
+        output_video_path = _tensor_composite_video(
+            frames=frames_tensor,
+            audio_path=audio_path,
+            metadata=metadata,
+            output_path=output_video_path,
+        )
+
+        # --- Verify output ---
+        if not os.path.isfile(output_video_path):
+            raise RuntimeError(f"Output file was not created: {output_video_path}")
+
+        file_size_mb = os.path.getsize(output_video_path) / (1024 * 1024)
+
+        # Probe duration
+        duration_str = "unknown"
+        try:
+            probe = subprocess.run(
+                [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "csv=p=0",
+                    output_video_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
             )
+            if probe.returncode == 0 and probe.stdout.strip():
+                duration_sec = float(probe.stdout.strip())
+                mins, secs = divmod(duration_sec, 60)
+                hours, mins = divmod(mins, 60)
+                duration_str = f"{int(hours)}h {int(mins)}m {secs:.1f}s"
+        except Exception:
+            pass
+
+        print(f"[MementoComposite] Output: {output_video_path}")
+        print(f"[MementoComposite] File size:  {file_size_mb:.1f} MB")
+        print(f"[MementoComposite] Duration:   {duration_str}")
+
+        return output_video_path
+
+    # ------------------------------------------------------------------
+    # File-based fallback composite path
+    # ------------------------------------------------------------------
+
+    def _composite_file_based(
+        self,
+        final_frames_dir,
+        audio_path,
+        original_fps,
+        original_width,
+        original_height,
+    ):
+        """文件级 fallback 路径（原有逻辑）。"""
+        logger.info("[MementoComposite] ====== 使用文件级 Fallback 路径 ======")
 
         # --- Determine frame pattern ---
         frame_pattern, start_number = self._detect_frame_pattern(final_frames_dir)
@@ -312,6 +432,58 @@ class MementoComposite:
         print(f"[MementoComposite] Output: {output_video_path}")
         print(f"[MementoComposite] File size:  {file_size_mb:.1f} MB")
         print(f"[MementoComposite] Duration:   {duration_str}")
+
+        return output_video_path
+
+    # ------------------------------------------------------------------
+    # Main composite pipeline
+    # ------------------------------------------------------------------
+
+    def composite(
+        self,
+        final_frames_dir,
+        audio_path,
+        original_fps,
+        original_width,
+        original_height,
+    ):
+        """Encode the final video.
+
+        Returns the absolute path to the output .mp4 file.
+        """
+        print(f"[MementoComposite] final_frames_dir={final_frames_dir}")
+        print(f"[MementoComposite] audio_path={audio_path}")
+        print(f"[MementoComposite] original_fps={original_fps}")
+        print(f"[MementoComposite] original_width={original_width}")
+        print(f"[MementoComposite] original_height={original_height}")
+        print(f"[MementoComposite] _use_tensor_ops={_use_tensor_ops}")
+
+        # --- Validate inputs ---
+        if not final_frames_dir or not os.path.isdir(final_frames_dir):
+            raise ValueError(
+                f"final_frames_dir is not a valid directory: {final_frames_dir}"
+            )
+
+        # --- Select path ---
+        if _use_tensor_ops and _tensor_composite_video is not None:
+            try:
+                output_video_path = self._composite_tensor_ops(
+                    final_frames_dir, audio_path,
+                    original_fps, original_width, original_height,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[MementoComposite] Tensor ops 路径失败 ({e})，回退到文件级 fallback"
+                )
+                output_video_path = self._composite_file_based(
+                    final_frames_dir, audio_path,
+                    original_fps, original_width, original_height,
+                )
+        else:
+            output_video_path = self._composite_file_based(
+                final_frames_dir, audio_path,
+                original_fps, original_width, original_height,
+            )
 
         return (output_video_path,)
 

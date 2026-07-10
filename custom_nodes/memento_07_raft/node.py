@@ -17,6 +17,8 @@
      e. Mask 感知混合: Mask 区域内使用 warp 后的合成帧，区域外使用原始帧
   2. RAFT 不可用时回退至 cv2 Farneback 稠密光流
   3. 时序平滑: 对连续 3 帧进行加权平均
+
+当 memento_pipeline.ops.sub.raft_correct 可用时，核心逻辑委托给 tensor-based 实现。
 """
 
 from __future__ import annotations
@@ -32,6 +34,16 @@ import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ── Tensor ops 导入 ──
+_use_tensor_ops = False
+_tensor_raft_correct = None
+try:
+    from memento_pipeline.ops.sub import raft_correct as _tensor_raft_correct
+    _use_tensor_ops = True
+    logger.info("[MementoRAFT] 已加载 memento_pipeline.ops.sub.raft_correct，将使用 tensor ops 路径")
+except ImportError as e:
+    logger.info(f"[MementoRAFT] memento_pipeline.ops.sub 不可用 ({e})，将使用文件级 fallback 路径")
 
 # ── PyTorch + RAFT 导入 ──
 _RAFT_AVAILABLE = False
@@ -498,7 +510,8 @@ class MementoRAFT:
 
         return smoothed
 
-    def correct(
+    # ── Tensor Ops 路径 ──
+    def _correct_tensor_ops(
         self,
         frames_dir: str,
         synthetic_dir: str,
@@ -507,50 +520,128 @@ class MementoRAFT:
         mask_blend_strength: float,
         temporal_weight: float,
         use_raft: bool,
-    ) -> Tuple[str]:
+    ) -> Tuple[str, int, int, int, float, str]:
+        """使用 memento_pipeline.ops.sub.raft_correct 的 tensor ops 路径。"""
+        import torch
+
+        logger.info("[MementoRAFT] ====== 使用 Tensor Ops 路径 (memento_pipeline.ops.sub.raft_correct) ======")
+
+        # ── 获取帧信息 ──
+        h_frames, w_frames, num_frames, frame_files = self._get_frame_info(frames_dir)
+        h_synth, w_synth, num_synth, synth_files = self._get_frame_info(synthetic_dir)
+        h_mask, w_mask, num_masks, mask_files = self._get_frame_info(mask_dir)
+
+        num_frames = min(num_frames, num_synth, num_masks)
+        target_h, target_w = h_frames, w_frames
+
+        logger.info(f"[MementoRAFT] 对齐后帧数: {num_frames}, 分辨率: {target_w}x{target_h}")
+
+        if num_frames < 2:
+            raise RuntimeError(f"帧数不足（需要至少 2 帧）: {num_frames}")
+
+        # ── 加载帧到 numpy 数组 ──
+        logger.info("[MementoRAFT] 预加载帧到内存...")
+        orig_frames_np = []
+        synth_frames_np = []
+        masks_np = []
+
+        for i in range(num_frames):
+            orig = self._load_frame(frames_dir, i, target_h, target_w, is_gray=False, files=frame_files)
+            synth = self._load_frame(synthetic_dir, i, target_h, target_w, is_gray=False, files=synth_files)
+            msk = self._load_frame(mask_dir, i, target_h, target_w, is_gray=True, files=mask_files)
+
+            if orig is None or synth is None or msk is None:
+                raise RuntimeError(f"帧 {i+1} 加载失败")
+
+            orig_frames_np.append(orig)
+            synth_frames_np.append(synth)
+            masks_np.append(msk)
+
+        # ── 转换为 tensor ──
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # numpy BGR uint8 -> tensor RGB float32 [0,1] (N, 3, H, W)
+        orig_tensor = torch.from_numpy(
+            np.stack([cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in orig_frames_np]).astype(np.float32) / 255.0
+        ).permute(0, 3, 1, 2).to(device)
+
+        synth_tensor = torch.from_numpy(
+            np.stack([cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in synth_frames_np]).astype(np.float32) / 255.0
+        ).permute(0, 3, 1, 2).to(device)
+
+        # mask: (N, H, W) uint8 -> (N, 1, H, W) float32 [0,1]
+        mask_tensor = torch.from_numpy(
+            np.stack(masks_np).astype(np.float32) / 255.0
+        ).unsqueeze(1).to(device)
+
         logger.info(
-            f"[MementoRAFT] 开始稠密光流时序矫正:\n"
-            f"  frames_dir={frames_dir}\n"
-            f"  synthetic_dir={synthetic_dir}\n"
-            f"  mask_dir={mask_dir}\n"
-            f"  flow_diff_threshold={flow_diff_threshold}\n"
-            f"  mask_blend_strength={mask_blend_strength}\n"
-            f"  temporal_weight={temporal_weight}\n"
-            f"  use_raft={use_raft}"
+            f"[MementoRAFT] 张量准备完成: orig={orig_tensor.shape}, "
+            f"synth={synth_tensor.shape}, mask={mask_tensor.shape}, device={device}"
         )
 
-        # ── 输入验证 ──
-        for path, name in [
-            (frames_dir, "frames_dir"),
-            (synthetic_dir, "synthetic_dir"),
-            (mask_dir, "mask_dir"),
-        ]:
-            if not path or not os.path.exists(path):
-                raise FileNotFoundError(f"{name} 目录不存在: {path}")
+        # ── 调用 tensor ops ──
+        total_start = time.time()
+        aligned_tensor = _tensor_raft_correct(
+            original_frames=orig_tensor,
+            synthetic_frames=synth_tensor,
+            masks=mask_tensor,
+            flow_diff_threshold=flow_diff_threshold,
+            mask_blend_strength=mask_blend_strength,
+        )  # (N, 3, H, W) float32 [0,1]
+
+        total_elapsed = time.time() - total_start
+
+        # ── 保存输出帧 ──
+        flow_aligned_dir = "/workspace/flow_aligned"
+        Path(flow_aligned_dir).mkdir(parents=True, exist_ok=True)
+
+        aligned_np = aligned_tensor.cpu().permute(0, 2, 3, 1).numpy()  # (N, H, W, 3) float32 [0,1]
+        # RGB -> BGR
+        aligned_np = (aligned_np * 255.0).clip(0, 255).astype(np.uint8)
+        aligned_np = aligned_np[..., ::-1].copy()
+
+        logger.info(f"[MementoRAFT] 保存矫正帧到 {flow_aligned_dir}...")
+        for i, frame in enumerate(aligned_np):
+            out_path = os.path.join(flow_aligned_dir, f"aligned_{i+1:05d}.png")
+            cv2.imwrite(out_path, frame)
+
+        fps_processing = num_frames / total_elapsed if total_elapsed > 0 else 0
+        logger.info(
+            f"[MementoRAFT] Tensor ops 处理完成: {num_frames} 帧, "
+            f"耗时 {total_elapsed:.1f}s ({fps_processing:.2f} fps)"
+        )
+
+        return flow_aligned_dir, num_frames, target_w, target_h, total_elapsed, fps_processing
+
+    # ── 文件级 Fallback 路径 ──
+    def _correct_file_based(
+        self,
+        frames_dir: str,
+        synthetic_dir: str,
+        mask_dir: str,
+        flow_diff_threshold: float,
+        mask_blend_strength: float,
+        temporal_weight: float,
+        use_raft: bool,
+    ) -> Tuple[str, int, int, int, float, float]:
+        """文件级 fallback 路径（原有逻辑）。"""
+        logger.info("[MementoRAFT] ====== 使用文件级 Fallback 路径 ======")
 
         # ── 获取各目录帧信息 ──
         h_frames, w_frames, num_frames, frame_files = self._get_frame_info(frames_dir)
         h_synth, w_synth, num_synth, synth_files = self._get_frame_info(synthetic_dir)
         h_mask, w_mask, num_masks, mask_files = self._get_frame_info(mask_dir)
 
-        logger.info(
-            f"[MementoRAFT] 原始帧: {num_frames} 帧, {w_frames}x{h_frames}"
-        )
-        logger.info(
-            f"[MementoRAFT] 合成帧: {num_synth} 帧, {w_synth}x{h_synth}"
-        )
-        logger.info(
-            f"[MementoRAFT] Mask: {num_masks} 帧, {w_mask}x{h_mask}"
-        )
+        logger.info(f"[MementoRAFT] 原始帧: {num_frames} 帧, {w_frames}x{h_frames}")
+        logger.info(f"[MementoRAFT] 合成帧: {num_synth} 帧, {w_synth}x{h_synth}")
+        logger.info(f"[MementoRAFT] Mask: {num_masks} 帧, {w_mask}x{h_mask}")
 
         # 取最小帧数对齐
         num_frames = min(num_frames, num_synth, num_masks)
         logger.info(f"[MementoRAFT] 对齐后帧数: {num_frames}")
 
         if num_frames < 2:
-            raise RuntimeError(
-                f"帧数不足（需要至少 2 帧）: {num_frames}"
-            )
+            raise RuntimeError(f"帧数不足（需要至少 2 帧）: {num_frames}")
 
         # 统一分辨率为原始帧尺寸
         target_h, target_w = h_frames, w_frames
@@ -683,6 +774,70 @@ class MementoRAFT:
         if flow_computer.use_raft and flow_computer._raft_loader is not None:
             flow_computer._raft_loader.unload()
 
+        return flow_aligned_dir, num_frames, target_w, target_h, total_elapsed, fps_processing
+
+    # ── 主入口 ──
+    def correct(
+        self,
+        frames_dir: str,
+        synthetic_dir: str,
+        mask_dir: str,
+        flow_diff_threshold: float,
+        mask_blend_strength: float,
+        temporal_weight: float,
+        use_raft: bool,
+    ) -> Tuple[str]:
+        logger.info(
+            f"[MementoRAFT] 开始稠密光流时序矫正:\n"
+            f"  frames_dir={frames_dir}\n"
+            f"  synthetic_dir={synthetic_dir}\n"
+            f"  mask_dir={mask_dir}\n"
+            f"  flow_diff_threshold={flow_diff_threshold}\n"
+            f"  mask_blend_strength={mask_blend_strength}\n"
+            f"  temporal_weight={temporal_weight}\n"
+            f"  use_raft={use_raft}\n"
+            f"  _use_tensor_ops={_use_tensor_ops}"
+        )
+
+        # ── 输入验证 ──
+        for path, name in [
+            (frames_dir, "frames_dir"),
+            (synthetic_dir, "synthetic_dir"),
+            (mask_dir, "mask_dir"),
+        ]:
+            if not path or not os.path.exists(path):
+                raise FileNotFoundError(f"{name} 目录不存在: {path}")
+
+        # ── 选择路径 ──
+        if _use_tensor_ops and _tensor_raft_correct is not None:
+            try:
+                flow_aligned_dir, num_frames, target_w, target_h, total_elapsed, fps_processing = (
+                    self._correct_tensor_ops(
+                        frames_dir, synthetic_dir, mask_dir,
+                        flow_diff_threshold, mask_blend_strength,
+                        temporal_weight, use_raft,
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[MementoRAFT] Tensor ops 路径失败 ({e})，回退到文件级 fallback"
+                )
+                flow_aligned_dir, num_frames, target_w, target_h, total_elapsed, fps_processing = (
+                    self._correct_file_based(
+                        frames_dir, synthetic_dir, mask_dir,
+                        flow_diff_threshold, mask_blend_strength,
+                        temporal_weight, use_raft,
+                    )
+                )
+        else:
+            flow_aligned_dir, num_frames, target_w, target_h, total_elapsed, fps_processing = (
+                self._correct_file_based(
+                    frames_dir, synthetic_dir, mask_dir,
+                    flow_diff_threshold, mask_blend_strength,
+                    temporal_weight, use_raft,
+                )
+            )
+
         # ── 更新 context.json ──
         context_path = "/workspace/context.json"
         context = {}
@@ -699,7 +854,7 @@ class MementoRAFT:
             "flow_diff_threshold": flow_diff_threshold,
             "mask_blend_strength": mask_blend_strength,
             "temporal_weight": temporal_weight,
-            "flow_method": "RAFT" if flow_computer.use_raft else "Farneback",
+            "flow_method": "tensor_ops" if _use_tensor_ops else ("RAFT" if use_raft else "Farneback"),
             "flow_aligned_width": target_w,
             "flow_aligned_height": target_h,
             "processing_time_sec": round(total_elapsed, 1),

@@ -1,12 +1,21 @@
-"""Memento 03 — MediaPipe 33点 2D人体姿态检测
+"""Memento 03 — MediaPipe 33点 2D人体姿态检测 + 骨骼热力图
 
-输入: 01 原始 30fps 帧 + 02 人物 Mask
-输出: Pose 骨骼热力图（每帧一张热力图 PNG）
+输入:
+  - 01 原始 30fps 帧 (frames_dir)
+  - 02 人物 Mask (mask_dir) — 来自 SAM3 视频分割
+
+输出:
+  - Pose 骨骼热力图（每帧一张热力图 PNG）
+  - 关键点 JSON（33 关键点坐标 + 可见度）
 
 结合 Mask 过滤干扰:
   - Mask 外区域涂黑后检测 → 消除背景人物干扰
   - 关键点落在 Mask 外 → visibility=0
   - 骨骼热力图仅在 Mask 区域内绘制
+
+控制信号来源:
+  - Mask  → 来自 02 SAM3 视频分割
+  - 原始帧 → 来自 01 原始 30fps 帧
 """
 import logging
 import json
@@ -14,12 +23,27 @@ import os
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-mp_pose = mp.solutions.pose
+# ── 尝试导入 memento_pipeline.ops GPU 张量操作 ──
+try:
+    from memento_pipeline.ops import extract_pose_2d as _ops_extract_pose_2d
+    _TENSOR_OPS_AVAILABLE = True
+    logger.info("[MementoPose2D] memento_pipeline.ops 已加载，将使用 GPU 张量操作")
+except ImportError:
+    _TENSOR_OPS_AVAILABLE = False
+    logger.info("[MementoPose2D] memento_pipeline.ops 未安装，使用文件级回退逻辑")
+
+# ── MediaPipe 导入 ──
+try:
+    import mediapipe as mp
+    mp_pose = mp.solutions.pose
+    _MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    _MEDIAPIPE_AVAILABLE = False
+    logger.warning("[MementoPose2D] mediapipe 未安装，将使用空关键点")
 
 # ── MediaPipe 33 关键点间的骨架连线 ──
 SKELETON_CONNECTIONS = [
@@ -35,7 +59,14 @@ SKELETON_CONNECTIONS = [
 
 
 class MementoPose2D:
-    """节点 3: 2D 骨骼 — MediaPipe 33 关键点 + 骨骼热力图"""
+    """节点 3: 2D 骨骼 — MediaPipe 33 关键点 + 骨骼热力图 (Mask 过滤)
+
+    输入: 01 原始帧 + 02 人物 Mask
+    输出: 骨骼热力图 + 关键点 JSON
+    """
+
+    # 是否使用 GPU 张量操作
+    _use_tensor_ops = _TENSOR_OPS_AVAILABLE
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -53,6 +84,10 @@ class MementoPose2D:
     RETURN_NAMES = ("pose_json_path", "heatmap_dir")
     FUNCTION = "extract"
     CATEGORY = "Memento/03_Pose2D"
+
+    # ------------------------------------------------------------------
+    # 文件级辅助方法（回退逻辑使用）
+    # ------------------------------------------------------------------
 
     def load_mask(self, mask_path: str, target_h: int, target_w: int) -> np.ndarray | None:
         if not os.path.exists(mask_path):
@@ -122,13 +157,120 @@ class MementoPose2D:
             heatmap = (heatmap / heatmap.max() * 255).astype(np.uint8)
         return heatmap.astype(np.uint8)
 
-    def extract(self, frames_dir: str, mask_dir: str,
-                min_detection_confidence: float, min_tracking_confidence: float,
-                heatmap_sigma: float):
-        logger.info(
-            f"[MementoPose2D] frames: {frames_dir}, masks: {mask_dir}, "
-            f"sigma={heatmap_sigma}"
+    # ------------------------------------------------------------------
+    # GPU 张量操作路径
+    # ------------------------------------------------------------------
+
+    def _extract_tensor_ops(self, frames_dir: str, mask_dir: str,
+                             min_detection_confidence: float,
+                             min_tracking_confidence: float,
+                             heatmap_sigma: float):
+        """使用 memento_pipeline.ops.extract_pose_2d 进行 GPU 张量操作"""
+        if not _TENSOR_OPS_AVAILABLE:
+            raise RuntimeError("memento_pipeline.ops 不可用，无法使用张量操作路径")
+
+        frame_files = sorted([
+            f for f in os.listdir(frames_dir)
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+        if not frame_files:
+            raise RuntimeError(f"帧目录为空: {frames_dir}")
+
+        # 加载所有帧为张量 (N, 3, H, W) float32 [0, 1]
+        import torch
+        frames_np = []
+        for fn in frame_files:
+            img = cv2.imread(os.path.join(frames_dir, fn))
+            if img is None:
+                raise RuntimeError(f"无法读取帧: {fn}")
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            frames_np.append(img)
+        frames_np = np.stack(frames_np, axis=0)  # (N, H, W, 3)
+        N, H, W, _ = frames_np.shape
+        frames_t = torch.from_numpy(frames_np.astype(np.float32) / 255.0).permute(0, 3, 1, 2)  # (N, 3, H, W)
+
+        # 加载所有掩码为张量 (N, 1, H, W) float32 [0, 1]
+        mask_files = sorted([
+            f for f in os.listdir(mask_dir)
+            if f.lower().endswith('.png')
+        ])
+        masks_np = np.zeros((N, H, W), dtype=np.float32)
+        for i in range(min(N, len(mask_files))):
+            mask_path = os.path.join(mask_dir, mask_files[i])
+            mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            if mask is not None:
+                if mask.shape[:2] != (H, W):
+                    mask = cv2.resize(mask, (W, H))
+                masks_np[i] = mask.astype(np.float32) / 255.0
+        masks_t = torch.from_numpy(masks_np).unsqueeze(1)  # (N, 1, H, W)
+
+        # 调用 ops
+        keypoints_dict, heatmaps_t = _ops_extract_pose_2d(
+            frames=frames_t,
+            masks=masks_t,
+            min_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
         )
+
+        # 创建输出目录
+        pose_dir = "/workspace/pose"
+        heatmap_dir = "/workspace/pose_heatmap"
+        Path(pose_dir).mkdir(parents=True, exist_ok=True)
+        Path(heatmap_dir).mkdir(parents=True, exist_ok=True)
+
+        # 保存热力图
+        heatmaps_np_out = heatmaps_t.cpu().squeeze(1).numpy()  # (N, H, W)
+        for i in range(N):
+            hm = heatmaps_np_out[i]
+            if hm.max() > 0:
+                hm = (hm / hm.max() * 255).astype(np.uint8)
+            else:
+                hm = np.zeros((H, W), dtype=np.uint8)
+            heatmap_path = os.path.join(heatmap_dir, f"heatmap_{i+1:05d}.png")
+            cv2.imwrite(heatmap_path, hm)
+
+        # 保存 JSON
+        pose_json_path = os.path.join(pose_dir, "keypoints.json")
+        with open(pose_json_path, "w") as f:
+            json.dump(keypoints_dict, f, indent=2)
+
+        # 更新 context.json
+        context_path = "/workspace/context.json"
+        context = {}
+        if os.path.exists(context_path):
+            with open(context_path, "r") as f:
+                context = json.load(f)
+
+        context.update({
+            "pose_json_path": pose_json_path,
+            "heatmap_dir": heatmap_dir,
+            "num_pose_frames": len(keypoints_dict),
+            "keypoint_count": 33,
+        })
+
+        with open(context_path, "w") as f:
+            json.dump(context, f, indent=2)
+
+        detected_frames = sum(
+            1 for v in keypoints_dict.values() if v["visibility"][0] > 0
+        )
+        logger.info(
+            f"[MementoPose2D] (tensor ops) 完成: {detected_frames}/{len(keypoints_dict)} 帧检测到姿势, "
+            f"热力图输出到 {heatmap_dir}"
+        )
+        return (pose_json_path, heatmap_dir)
+
+    # ------------------------------------------------------------------
+    # 文件级回退路径
+    # ------------------------------------------------------------------
+
+    def _extract_file_based(self, frames_dir: str, mask_dir: str,
+                             min_detection_confidence: float,
+                             min_tracking_confidence: float,
+                             heatmap_sigma: float):
+        """使用 MediaPipe + 文件级逻辑进行姿态检测"""
+        if not _MEDIAPIPE_AVAILABLE:
+            raise ImportError("mediapipe 未安装，且 memento_pipeline.ops 不可用。无法执行姿态检测。")
 
         if not os.path.exists(frames_dir):
             raise FileNotFoundError(f"帧目录不存在: {frames_dir}")
@@ -239,11 +381,41 @@ class MementoPose2D:
             1 for v in all_keypoints.values() if v["visibility"][0] > 0
         )
         logger.info(
-            f"[MementoPose2D] 完成: {detected_frames}/{len(all_keypoints)} 帧检测到姿势, "
+            f"[MementoPose2D] (file-based) 完成: {detected_frames}/{len(all_keypoints)} 帧检测到姿势, "
             f"热力图输出到 {heatmap_dir}"
         )
         return (pose_json_path, heatmap_dir)
 
+    # ------------------------------------------------------------------
+    # 主入口
+    # ------------------------------------------------------------------
+
+    def extract(self, frames_dir: str, mask_dir: str,
+                min_detection_confidence: float, min_tracking_confidence: float,
+                heatmap_sigma: float):
+        logger.info(
+            f"[MementoPose2D] frames: {frames_dir}, masks: {mask_dir}, "
+            f"sigma={heatmap_sigma}, tensor_ops={self._use_tensor_ops}"
+        )
+
+        if self._use_tensor_ops and _TENSOR_OPS_AVAILABLE:
+            try:
+                return self._extract_tensor_ops(
+                    frames_dir, mask_dir,
+                    min_detection_confidence, min_tracking_confidence,
+                    heatmap_sigma,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[MementoPose2D] GPU 张量操作失败: {e}，回退到文件级逻辑"
+                )
+
+        return self._extract_file_based(
+            frames_dir, mask_dir,
+            min_detection_confidence, min_tracking_confidence,
+            heatmap_sigma,
+        )
+
 
 NODE_CLASS_MAPPINGS = {"MementoPose2D": MementoPose2D}
-NODE_DISPLAY_NAME_MAPPINGS = {"MementoPose2D": "Memento 03 - MediaPipe 2D 骨骼"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MementoPose2D": "Memento 03 - MediaPipe 2D 骨骼 + 热力图 (Mask过滤)"}
