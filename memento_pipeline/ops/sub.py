@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 MODEL_CACHE: Dict[str, object] = {
     "_ltx_pipeline": None,          # ICLoraPipeline instance
-    "_ltx_control_key": None,       # (control_mode, control_strength) cache key
+    "_ltx_control_key": None,       # (control_mode, control_strength, ingredients_enabled, ingredients_strength) cache key
     "_raft_model": None,            # RAFT torchvision model
     "_raft_device": None,           # torch.device for RAFT
 }
@@ -246,18 +246,145 @@ def _build_control_mp4_from_channel(
     return output_mp4
 
 
+def _build_reference_sheet(
+    reference_images: list,
+    sheet_width: int = 1920,
+    sheet_height: int = 1080,
+    columns: int = 5,
+) -> "Image.Image":
+    """将多张参考图像合成为一张 Reference Sheet（黑底 + 多视角布局）。
+
+    Ingredients IC-LoRA 要求输入一个 Reference Sheet：一张在黑色背景上
+    展示角色的合成图像。模型通过该 Sheet 保持角色外观一致性。
+
+    Returns:
+        Reference Sheet PIL Image (RGB, 黑色背景)
+    """
+    from PIL import Image
+
+    n = len(reference_images)
+    if n == 0:
+        raise ValueError("参考图像列表为空")
+
+    rows = (n + columns - 1) // columns
+    cell_w = sheet_width // columns
+    cell_h = sheet_height // rows
+
+    canvas = Image.new("RGB", (sheet_width, sheet_height), (0, 0, 0))
+
+    for idx, img in enumerate(reference_images):
+        row = idx // columns
+        col = idx % columns
+
+        img_ratio = img.width / img.height
+        cell_ratio = cell_w / cell_h
+
+        if img_ratio > cell_ratio:
+            new_h = cell_h
+            new_w = int(cell_h * img_ratio)
+        else:
+            new_w = cell_w
+            new_h = int(cell_w / img_ratio)
+
+        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+        x_offset = col * cell_w + (cell_w - new_w) // 2
+        y_offset = row * cell_h + (cell_h - new_h) // 2
+
+        canvas.paste(img_resized, (x_offset, y_offset))
+
+    logger.info(
+        f"[sub.06] Reference Sheet: {n} images → "
+        f"{columns}x{rows} layout, {sheet_width}x{sheet_height}"
+    )
+    return canvas
+
+
+def _reference_sheet_to_static_video(
+    reference_sheet: "Image.Image",
+    output_mp4: str,
+    num_frames: int,
+    fps: int = 24,
+) -> str:
+    """将 Reference Sheet 转换为静态视频（同一帧循环）。
+
+    Ingredients IC-LoRA 要求 Reference Sheet 以静态视频形式输入，
+    最少 121 帧。
+    """
+    effective_frames = max(num_frames, 121)
+
+    tmp_dir = tempfile.mkdtemp(prefix="memento_refsheet_")
+    try:
+        sheet_np = np.array(reference_sheet)
+        sheet_bgr = cv2.cvtColor(sheet_np, cv2.COLOR_RGB2BGR)
+
+        single_frame_path = os.path.join(tmp_dir, "frame_00001.png")
+        cv2.imwrite(single_frame_path, sheet_bgr)
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-i", single_frame_path,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "18",
+            "-t", str(effective_frames / fps),
+            "-r", str(fps),
+            output_mp4,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg Reference Sheet video failed: {result.stderr[:500]}")
+
+        logger.info(
+            f"[sub.06] Reference Sheet video: {output_mp4} "
+            f"({effective_frames} frames, {fps}fps)"
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return output_mp4
+
+
+def _build_ingredients_prompt(user_prompt: str) -> str:
+    """构建 Ingredients 双段式 Prompt。
+
+    Ingredients IC-LoRA 要求 Prompt 格式为：
+      "Reference sheet: <面板描述> / Generated video: <动作描述>"
+    """
+    ref_description = (
+        "A character reference sheet with multiple viewing angles "
+        "showing the same character: front face close-up, 45-degree side view, "
+        "standard side profile, back view, and full body three-view. "
+        "The character maintains consistent facial features, hairstyle, "
+        "body type, and costume across all panels."
+    )
+    return f"Reference sheet: {ref_description} / Generated video: {user_prompt}"
+
+
 def _load_ltx_pipeline(
     control_mode: str,
     control_strength: float,
+    ingredients_enabled: bool = True,
+    ingredients_strength: float = 1.4,
     main_model: str = "/models/ltx/ltx-2.3-22b-dev-fp8.safetensors",
     iclora_dir: str = "/models/iclora/",
 ) -> object:
-    """Load or return cached ICLoraPipeline singleton."""
-    cache_key = (control_mode, control_strength)
+    """Load or return cached ICLoraPipeline singleton.
+
+    双 LoRA 架构:
+    - Union Control (depth+canny+pose 三合一) → 结构控制
+    - Ingredients (Reference Sheet) → 角色外观一致性
+    """
+    cache_key = (control_mode, control_strength, ingredients_enabled, ingredients_strength)
     cached = MODEL_CACHE.get("_ltx_pipeline")
     cached_key = MODEL_CACHE.get("_ltx_control_key")
     if cached is not None and cached_key == cache_key:
-        logger.info(f"[sub.06] Reusing cached LTX pipeline (mode={control_mode}, strength={control_strength})")
+        logger.info(
+            f"[sub.06] Reusing cached LTX pipeline "
+            f"(mode={control_mode}, strength={control_strength}, "
+            f"ingredients={'on' if ingredients_enabled else 'off'})"
+        )
         return cached
 
     if not _LTX_AVAILABLE:
@@ -275,6 +402,7 @@ def _load_ltx_pipeline(
         total_mem = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
         logger.info(f"[sub.06] GPU: {gpu_name}, total VRAM: {total_mem:.1f} GB")
 
+    # ── Union Control ──
     union_lora_path = os.path.join(iclora_dir, "ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors")
     if not os.path.exists(union_lora_path):
         raise FileNotFoundError(f"IC-LoRA Union Control not found: {union_lora_path}")
@@ -284,6 +412,17 @@ def _load_ltx_pipeline(
     ]
     logger.info(f"[sub.06] IC-LoRA Union Control loaded (depth+canny+pose 三合一, mode={control_mode})")
 
+    # ── Ingredients ──
+    if ingredients_enabled:
+        ingredients_path = os.path.join(iclora_dir, "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors")
+        if os.path.exists(ingredients_path):
+            loras.append(
+                LoraPathStrengthAndSDOps(path=ingredients_path, strength=ingredients_strength)
+            )
+            logger.info(f"[sub.06] IC-LoRA Ingredients loaded (strength={ingredients_strength})")
+        else:
+            logger.warning(f"[sub.06] Ingredients IC-LoRA not found: {ingredients_path}, skipping")
+
     start = time.time()
     pipeline = ICLoraPipeline(
         distilled_checkpoint_path=main_model,
@@ -292,7 +431,7 @@ def _load_ltx_pipeline(
         quantization=QuantizationPolicy.fp8_cast(),
     )
     elapsed = time.time() - start
-    logger.info(f"[sub.06] LTX pipeline loaded in {elapsed:.1f}s")
+    logger.info(f"[sub.06] LTX pipeline loaded in {elapsed:.1f}s ({len(loras)} LoRAs)")
 
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -312,16 +451,22 @@ def ltx_inpaint(
     prompt: str,                    # text prompt
     metadata: dict,                 # {"fps": 30, "width": 1920, "height": 1080, ...}
     control_strength: float = 0.7,
-    num_inference_steps: int = 8,
+    ingredients_enabled: bool = True,
+    ingredients_strength: float = 1.4,
+    num_inference_steps: int = 30,
     seed: int = 42,
 ) -> torch.Tensor:
-    """Node 06: LTX-Video 2.3 + IC-LoRA local inpainting.
+    """Node 06: LTX-Video 2.3 + IC-LoRA 双 LoRA 局部重绘。
 
     Control signals from control_pack channels:
       channel 0 (R) = Canny     (from node 05)
       channel 1 (G) = Distance  (from node 05)
       channel 2 (B) = Pose      (from node 03, via 05)
       channel 3 (A) = Temporal  (from node 05)
+
+    双 LoRA 架构:
+      - Union Control (depth+canny+pose 三合一) → 结构控制
+      - Ingredients (Reference Sheet) → 角色外观一致性
 
     Composite:  result = generated_person * mask + original_frame * (1 - mask)
     Background is preserved; only the mask region is replaced.
@@ -330,13 +475,14 @@ def ltx_inpaint(
         synthetic_frames: (N, 3, H, W) float32 [0,1]
     """
     logger.info("=" * 60)
-    logger.info("[sub.06] ====== LTX Local Inpainting ======")
+    logger.info("[sub.06] ====== LTX Local Inpainting (双 LoRA) ======")
     logger.info(f"  frames:     {frames.shape}  dtype={frames.dtype}")
     logger.info(f"  masks:      {masks.shape}  dtype={masks.dtype}")
     logger.info(f"  control_pack: {control_pack.shape}  dtype={control_pack.dtype}")
     logger.info(f"  reference_dir: {reference_dir}")
     logger.info(f"  prompt:     {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
     logger.info(f"  control_strength: {control_strength}")
+    logger.info(f"  ingredients: {'启用' if ingredients_enabled else '禁用'} (strength={ingredients_strength})")
     logger.info(f"  steps: {num_inference_steps}  seed: {seed}")
 
     # -- Validate inputs --
@@ -418,8 +564,30 @@ def ltx_inpaint(
             reference_images.append(img)
         logger.info(f"[sub.06] Loaded {len(reference_images)} reference images")
 
+        # -- Ingredients: Reference Sheet + 静态视频 --
+        if ingredients_enabled:
+            try:
+                ref_sheet = _build_reference_sheet(reference_images)
+                refsheet_video_path = os.path.join(control_dir, "refsheet_ingredients.mp4")
+                _reference_sheet_to_static_video(ref_sheet, refsheet_video_path, N_a, fps)
+                control_videos.append((refsheet_video_path, ingredients_strength))
+                logger.info(
+                    f"[sub.06] Ingredients Reference Sheet added: strength={ingredients_strength}"
+                )
+            except Exception as e:
+                logger.warning(f"[sub.06] Reference Sheet generation failed: {e}, disabling Ingredients")
+                ingredients_enabled = False
+
+        # -- Ingredients Prompt --
+        effective_prompt = _build_ingredients_prompt(prompt) if ingredients_enabled else prompt
+        if ingredients_enabled:
+            logger.info(f"[sub.06] Ingredients prompt: {effective_prompt[:200]}...")
+
         # -- Load pipeline --
-        pipeline = _load_ltx_pipeline(control_mode, control_strength)
+        pipeline = _load_ltx_pipeline(
+            control_mode, control_strength,
+            ingredients_enabled, ingredients_strength,
+        )
 
         # -- Prepare reference tensor --
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -431,7 +599,7 @@ def ltx_inpaint(
         infer_start = time.time()
 
         pipeline_kwargs = {
-            "prompt": prompt,
+            "prompt": effective_prompt,
             "seed": seed,
             "height": h_a,
             "width": w_a,
@@ -444,11 +612,24 @@ def ltx_inpaint(
             "image": ref_tensor,
         }
 
+        # Ingredients 负向 Prompt
+        if ingredients_enabled:
+            pipeline_kwargs["negative_prompt"] = (
+                "worst quality, inconsistent motion, blurry, jittery, distorted"
+            )
+
         try:
             video_iterator, _ = pipeline(**pipeline_kwargs)
-        except TypeError:
-            logger.warning("[sub.06] Pipeline does not accept 'image' kwarg; retrying without it.")
-            pipeline_kwargs.pop("image", None)
+        except TypeError as e:
+            err_msg = str(e)
+            if "image" in err_msg:
+                logger.warning("[sub.06] Pipeline does not accept 'image' kwarg; retrying without it.")
+                pipeline_kwargs.pop("image", None)
+            elif "negative_prompt" in err_msg:
+                logger.warning("[sub.06] Pipeline does not accept 'negative_prompt' kwarg.")
+                pipeline_kwargs.pop("negative_prompt", None)
+            else:
+                raise
             video_iterator, _ = pipeline(**pipeline_kwargs)
 
         # -- Collect generated frames as tensors --

@@ -81,7 +81,19 @@ hf_hub_download(
 )
 " && log "IC-LoRA Union Control ✓" || { log "IC-LoRA Union Control 下载失败"; exit 1; }
 
-# ── 7. RAFT 光流模型 (torchvision 预训练权重) ──
+# ── 7. IC-LoRA Ingredients 角色一致性 (HuggingFace) ──
+log "下载 IC-LoRA Ingredients (角色一致性 Reference Sheet 约束)..."
+retry python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id='Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients',
+    filename='ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors',
+    local_dir='$MODEL_DIR/iclora',
+    local_dir_use_symlinks=False,
+)
+" && log "IC-LoRA Ingredients ✓" || { log "IC-LoRA Ingredients 下载失败"; exit 1; }
+
+# ── 8. RAFT 光流模型 (torchvision 预训练权重) ──
 log "预下载 RAFT 光流模型权重..."
 # torchvision 的 raft_large C_T_V2 权重会自动下载到 torch hub 缓存
 # 这里手动触发下载，确保构建镜像时已缓存

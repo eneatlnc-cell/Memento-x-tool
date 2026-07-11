@@ -65,7 +65,9 @@ class PipelineRunner:
         prompt: str = "",
         control_mode: str = "pose+depth+canny",
         control_strength: float = 0.7,
-        num_inference_steps: int = 8,
+        ingredients_enabled: bool = True,
+        ingredients_strength: float = 1.4,
+        num_inference_steps: int = 30,
         seed: int = 42,
         output_dir: str = OUTPUT_DIR,
     ):
@@ -75,6 +77,8 @@ class PipelineRunner:
         self.prompt = prompt
         self.control_mode = control_mode
         self.control_strength = control_strength
+        self.ingredients_enabled = ingredients_enabled
+        self.ingredients_strength = ingredients_strength
         self.num_inference_steps = num_inference_steps
         self.seed = seed
         self.output_dir = output_dir
@@ -231,7 +235,8 @@ class PipelineRunner:
             ltx_frames = ltx_inpaint(
                 frames_chunk, masks, control_pack,
                 self.reference_dir, self.prompt, self.metadata,
-                self.control_strength, self.num_inference_steps, self.seed,
+                self.control_strength, self.ingredients_enabled,
+                self.ingredients_strength, self.num_inference_steps, self.seed,
             )
             self.stats["stage_times"].setdefault("06_ltx", 0)
             self.stats["stage_times"]["06_ltx"] += time.time() - t

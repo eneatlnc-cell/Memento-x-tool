@@ -3,6 +3,10 @@
 基于原生 ltx-pipelines ICLoraPipeline（非 diffusers）。
 IC-LoRA 通过 LoraPathStrengthAndSDOps 原生加载，无需 peft。
 
+双 LoRA 约束架构:
+  - Union Control (depth+canny+pose 三合一) → 结构控制
+  - Ingredients (Reference Sheet) → 角色外观一致性
+
 控制信号来源（8路输入）:
   - 01_frames_dir      → 来自 01 原始 30fps 帧
   - 02_mask_dir        → 来自 02 SAM3 视频分割（人物 Mask）
@@ -16,7 +20,8 @@ IC-LoRA 通过 LoraPathStrengthAndSDOps 原生加载，无需 peft。
 核心行为：
 - 背景保持原始不变（通过 mask 合成）
 - 仅 mask 区域内的人物被替换为角色 B
-- 动作、姿态、空间透视、边缘轮廓由 IC-LoRA 约束
+- 动作、姿态、空间透视、边缘轮廓由 Union Control IC-LoRA 约束
+- 角色外观一致性由 Ingredients IC-LoRA Reference Sheet 约束
 - 合成公式：生成人物区域 + 原始背景 = 最终帧
 """
 
@@ -269,6 +274,160 @@ def load_mask_frame(mask_path: str, h: int, w: int) -> np.ndarray:
     return mask
 
 
+def build_reference_sheet(
+    reference_images: List[Image.Image],
+    sheet_width: int = 1920,
+    sheet_height: int = 1080,
+    columns: int = 5,
+) -> Image.Image:
+    """将多张参考图像合成为一张 Reference Sheet（黑底 + 多视角布局）。
+
+    Ingredients IC-LoRA 要求输入一个 Reference Sheet：一张在黑色背景上
+    展示角色、道具、场景的合成图像。模型通过该 Sheet 保持角色外观一致性。
+
+    布局策略：横向排列，每张参考图缩放到等宽等高的单元格内。
+    如果参考图数量不足，剩余单元格留空（黑色）。
+
+    Args:
+        reference_images: PIL Image 列表（角色参考图，5 视角）
+        sheet_width: Reference Sheet 总宽度
+        sheet_height: Reference Sheet 总高度
+        columns: 列数（默认 5 列，对应 5 视角）
+
+    Returns:
+        Reference Sheet PIL Image (RGB, 黑色背景)
+    """
+    n = len(reference_images)
+    if n == 0:
+        raise ValueError("参考图像列表为空，无法生成 Reference Sheet")
+
+    rows = (n + columns - 1) // columns
+    cell_w = sheet_width // columns
+    cell_h = sheet_height // rows
+
+    # 创建黑色背景画布
+    canvas = Image.new("RGB", (sheet_width, sheet_height), (0, 0, 0))
+
+    for idx, img in enumerate(reference_images):
+        row = idx // columns
+        col = idx % columns
+
+        # 缩放到单元格内（保持宽高比，填充整个单元格）
+        img_ratio = img.width / img.height
+        cell_ratio = cell_w / cell_h
+
+        if img_ratio > cell_ratio:
+            # 图像更宽 → 按高度缩放
+            new_h = cell_h
+            new_w = int(cell_h * img_ratio)
+        else:
+            # 图像更高 → 按宽度缩放
+            new_w = cell_w
+            new_h = int(cell_w / img_ratio)
+
+        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # 居中放置
+        x_offset = col * cell_w + (cell_w - new_w) // 2
+        y_offset = row * cell_h + (cell_h - new_h) // 2
+
+        canvas.paste(img_resized, (x_offset, y_offset))
+
+    logger.info(
+        f"[MementoLTX] Reference Sheet 生成: {n} 张参考图 → "
+        f"{columns}x{rows} 布局, {sheet_width}x{sheet_height}"
+    )
+    return canvas
+
+
+def reference_sheet_to_static_video(
+    reference_sheet: Image.Image,
+    output_mp4: str,
+    num_frames: int,
+    fps: int = 24,
+) -> str:
+    """将 Reference Sheet 转换为静态视频（同一帧循环）。
+
+    Ingredients IC-LoRA 要求 Reference Sheet 以静态视频形式输入
+    （同一帧循环到输出片段长度），最少 121 帧。
+
+    Args:
+        reference_sheet: Reference Sheet PIL Image
+        output_mp4: 输出 MP4 路径
+        num_frames: 目标帧数（最低 121 帧）
+        fps: 帧率
+
+    Returns:
+        输出 MP4 路径
+    """
+    # Ingredients 最低要求 121 帧
+    effective_frames = max(num_frames, 121)
+
+    tmp_dir = str(Path(output_mp4).parent / f".refsheet_tmp_{Path(output_mp4).stem}")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    try:
+        # 将 Reference Sheet 转为 numpy，写入一帧
+        sheet_np = np.array(reference_sheet)
+        # RGB → BGR for OpenCV
+        sheet_bgr = cv2.cvtColor(sheet_np, cv2.COLOR_RGB2BGR)
+
+        single_frame_path = os.path.join(tmp_dir, "frame_00001.png")
+        cv2.imwrite(single_frame_path, sheet_bgr)
+
+        # 用 FFmpeg loop 生成静态视频
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-i", single_frame_path,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "18",
+            "-t", str(effective_frames / fps),
+            "-r", str(fps),
+            output_mp4,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg Reference Sheet 静态视频生成失败: {result.stderr[:500]}"
+            )
+
+        logger.info(
+            f"[MementoLTX] Reference Sheet 静态视频: {output_mp4} "
+            f"({effective_frames} 帧, {fps}fps)"
+        )
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return output_mp4
+
+
+def build_ingredients_prompt(user_prompt: str) -> str:
+    """构建 Ingredients 双段式 Prompt。
+
+    Ingredients IC-LoRA 要求 Prompt 格式为：
+      "Reference sheet: <面板描述> / Generated video: <动作描述>"
+
+    Args:
+        user_prompt: 用户输入的原始 Prompt（描述角色 B 外观和动作）
+
+    Returns:
+        Ingredients 格式的 Prompt
+    """
+    # 自动生成 Reference sheet 面板描述
+    ref_description = (
+        "A character reference sheet with multiple viewing angles "
+        "showing the same character: front face close-up, 45-degree side view, "
+        "standard side profile, back view, and full body three-view. "
+        "The character maintains consistent facial features, hairstyle, "
+        "body type, and costume across all panels."
+    )
+
+    return f"Reference sheet: {ref_description} / Generated video: {user_prompt}"
+
+
 def composite_frame(
     original: np.ndarray,
     generated: np.ndarray,
@@ -394,7 +553,11 @@ def prepare_reference_tensor(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MementoLTX:
-    """节点 6: 局部重绘 — LTX-Video 2.3 + IC-LoRA 原生控制 (8路输入)
+    """节点 6: 局部重绘 — LTX-Video 2.3 + IC-LoRA 双 LoRA 约束 (8路输入)
+
+    双 LoRA 架构:
+      - Union Control (depth+canny+pose 三合一) → 结构控制
+      - Ingredients (Reference Sheet) → 角色外观一致性
 
     8路输入信号:
       - 01 原始帧 (背景保持)
@@ -408,24 +571,26 @@ class MementoLTX:
 
     使用 LTX-2 原生 ICLoraPipeline：
     - 主模型: /models/ltx/ltx-2.3-22b-dev-fp8.safetensors
-    - IC-LoRA: /models/iclora/ 下的 Union Control 三合一适配器 (depth+canny+pose)
+    - IC-LoRA Union: /models/iclora/ 下 Union Control 三合一 (depth+canny+pose)
+    - IC-LoRA Ingredients: /models/iclora/ 下 Reference Sheet 角色一致性
     - 控制信号: Pose/Depth/Canny 三个预计算 MP4 视频
-    - 参考图像: 角色 B 的 5 视角参考图
-    - 显存: FP8 量化约 10GB（主模型）+ IC-LoRA 654MB
+    - 参考图像: 角色 B 的 5 视角参考图 → 自动合成 Reference Sheet
+    - 显存: FP8 量化约 10GB（主模型）+ Union Control 654MB + Ingredients
 
     核心行为：
     - 背景保持原始不变（通过 mask 合成实现）
     - 仅 mask 区域（人物）被 LTX 生成的角色 B 替换
-    - 动作、姿态、空间透视、边缘轮廓由 IC-LoRA 约束
+    - 动作、姿态、空间透视、边缘轮廓由 Union Control IC-LoRA 约束
+    - 角色外观（面部、服装、体型）由 Ingredients Reference Sheet 约束
     """
 
     # ── 模型路径 ──
     MAIN_MODEL = "/models/ltx/ltx-2.3-22b-dev-fp8.safetensors"
     ICLORA_UNION = "/models/iclora/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"
+    ICLORA_INGREDIENTS = "/models/iclora/ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors"
 
-    # 管线缓存: key=(control_mode, control_strength) → pipeline 实例
-    # 不同控制模式需要不同的 IC-LoRA 组合，因此按组合缓存
-    _pipeline_cache: Dict[Tuple[str, float], object] = {}
+    # 管线缓存: key=(control_mode, control_strength, ingredients_enabled, ingredients_strength) → pipeline 实例
+    _pipeline_cache: Dict[Tuple[str, float, bool, float], object] = {}
 
     # 是否使用 GPU 张量操作
     _use_tensor_ops = _TENSOR_OPS_AVAILABLE
@@ -491,14 +656,25 @@ class MementoLTX:
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.05,
-                    "tooltip": "IC-LoRA 控制强度（越高越严格遵循控制信号）",
+                    "tooltip": "Union Control 控制强度（越高越严格遵循控制信号）",
+                }),
+                "ingredients_enabled": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "启用 Ingredients Reference Sheet 角色外观一致性约束",
+                }),
+                "ingredients_strength": ("FLOAT", {
+                    "default": 1.4,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.05,
+                    "tooltip": "Ingredients 控制强度（推荐 1.4，越高角色外观越严格匹配参考图）",
                 }),
                 "num_inference_steps": ("INT", {
-                    "default": 8,
+                    "default": 30,
                     "min": 1,
                     "max": 50,
                     "step": 1,
-                    "tooltip": "去噪步数（8 步为推荐值，步数越多质量越高但速度越慢）",
+                    "tooltip": "去噪步数（Ingredients 模式下推荐 30 步，普通模式 8 步）",
                 }),
                 "seed": ("INT", {
                     "default": 42,
@@ -527,24 +703,28 @@ class MementoLTX:
     # ═══════════════════════════════════════════════════════════════════════════
 
     @classmethod
-    def load_pipeline(cls, control_mode: str, control_strength: float):
-        """懒加载 ICLoraPipeline，按 (control_mode, control_strength) 缓存。
+    def load_pipeline(cls, control_mode: str, control_strength: float,
+                      ingredients_enabled: bool = True, ingredients_strength: float = 1.4):
+        """懒加载 ICLoraPipeline，按 (control_mode, control_strength, ingredients_enabled, ingredients_strength) 缓存。
 
-        不同控制模式需要不同的 IC-LoRA 组合，因此按组合键缓存管线实例。
-        同一 (mode, strength) 组合的多次调用将复用同一管线，避免重复加载。
+        双 LoRA 架构：
+        - Union Control (depth+canny+pose 三合一) → 结构控制
+        - Ingredients (Reference Sheet) → 角色外观一致性
 
         Args:
             control_mode: 控制模式字符串（如 "pose+depth+canny"）
-            control_strength: IC-LoRA 控制强度
+            control_strength: Union Control 控制强度
+            ingredients_enabled: 是否启用 Ingredients Reference Sheet 约束
+            ingredients_strength: Ingredients 控制强度 (推荐 1.4)
 
         Returns:
             ICLoraPipeline 实例
         """
-        cache_key = (control_mode, control_strength)
+        cache_key = (control_mode, control_strength, ingredients_enabled, ingredients_strength)
         if cache_key in cls._pipeline_cache:
             logger.info(
                 f"[MementoLTX] 复用已缓存的管线: mode={control_mode}, "
-                f"strength={control_strength}"
+                f"strength={control_strength}, ingredients={'on' if ingredients_enabled else 'off'}"
             )
             return cls._pipeline_cache[cache_key]
 
@@ -577,23 +757,47 @@ class MementoLTX:
                 f"请先运行 bash download_models.sh 下载模型"
             )
 
-        # 构建 IC-LoRA 列表 (Union Control 三合一，单文件覆盖 depth/canny/pose)
+        # 构建 IC-LoRA 列表
+        loras = []
+
+        # ── Union Control (depth+canny+pose 三合一) ──
         if not os.path.exists(cls.ICLORA_UNION):
             raise FileNotFoundError(
                 f"IC-LoRA Union Control 模型不存在: {cls.ICLORA_UNION}\n"
                 f"请先运行 bash download_models.sh 下载模型"
             )
-
-        loras = [
+        loras.append(
             LoraPathStrengthAndSDOps(
                 path=cls.ICLORA_UNION,
                 strength=control_strength,
             )
-        ]
+        )
+        logger.info(
+            f"[MementoLTX] Union Control: strength={control_strength}"
+        )
+
+        # ── Ingredients (Reference Sheet 角色一致性) ──
+        if ingredients_enabled:
+            if not os.path.exists(cls.ICLORA_INGREDIENTS):
+                logger.warning(
+                    f"[MementoLTX] Ingredients IC-LoRA 不存在: {cls.ICLORA_INGREDIENTS}, "
+                    f"将跳过 Ingredients 约束"
+                )
+            else:
+                loras.append(
+                    LoraPathStrengthAndSDOps(
+                        path=cls.ICLORA_INGREDIENTS,
+                        strength=ingredients_strength,
+                    )
+                )
+                logger.info(
+                    f"[MementoLTX] Ingredients: strength={ingredients_strength}"
+                )
 
         logger.info(
-            f"[MementoLTX] 加载 LTX-Video 2.3 + IC-LoRA Union Control "
-            f"(depth+canny+pose 三合一, mode={control_mode})"
+            f"[MementoLTX] 加载 LTX-Video 2.3 + {len(loras)} 个 IC-LoRA: "
+            f"Union Control{' + Ingredients' if ingredients_enabled else ''} "
+            f"(mode={control_mode})"
         )
 
         # 初始化 ICLoraPipeline
@@ -660,7 +864,8 @@ class MementoLTX:
 
     def _generate_tensor_ops(self, frames_dir, mask_dir, heatmap_dir, depth_dir,
                               control_pack_dir, reference_dir, prompt, metadata_json,
-                              control_mode, control_strength, num_inference_steps, seed):
+                              control_mode, control_strength, ingredients_enabled,
+                              ingredients_strength, num_inference_steps, seed):
         """使用 memento_pipeline.ops.sub.ltx_inpaint 进行 GPU 张量操作"""
         if not _TENSOR_OPS_AVAILABLE:
             raise RuntimeError("memento_pipeline.ops.sub 不可用，无法使用张量操作路径")
@@ -731,12 +936,14 @@ class MementoLTX:
                     control_np[i, c] = cp[:, :, c].astype(np.float32) / 255.0
         control_t = torch.from_numpy(control_np)
 
-        # 设置 metadata dict 包含 control_mode
+        # 设置 metadata dict 包含 control_mode 和 ingredients 参数
         metadata_dict = {
             "fps": metadata["fps"],
             "width": w,
             "height": h,
             "control_mode": control_mode,
+            "ingredients_enabled": ingredients_enabled,
+            "ingredients_strength": ingredients_strength,
         }
 
         # 调用 ops.sub.ltx_inpaint
@@ -748,6 +955,8 @@ class MementoLTX:
             prompt=prompt,
             metadata=metadata_dict,
             control_strength=control_strength,
+            ingredients_enabled=ingredients_enabled,
+            ingredients_strength=ingredients_strength,
             num_inference_steps=num_inference_steps,
             seed=seed,
         )  # (N, 3, H, W) float32 [0, 1]
@@ -796,6 +1005,8 @@ class MementoLTX:
         metadata_json: str,        # 08_metadata_json
         control_mode: str,
         control_strength: float,
+        ingredients_enabled: bool,
+        ingredients_strength: float,
         num_inference_steps: int,
         seed: int,
     ):
@@ -806,12 +1017,13 @@ class MementoLTX:
         2. 解析 metadata.json 获取原始视频参数（fps, 分辨率, 时长）
         3. 获取帧目录的实际尺寸和帧数
         4. 加载角色 B 参考图像（5 视角）
-        5. 对齐分辨率（64 的倍数）和帧数（8n+1）到 LTX-Video 要求
-        6. 将三个控制信号目录（Pose/Depth/Canny）转换为 MP4 视频
-        7. 加载 ICLoraPipeline 并执行 LTX 推理
-        8. 逐帧合成：生成人物区域 + 原始背景（mask 控制）
-        9. 保存合成帧到 synthetic_dir
-        10. 更新 context.json 记录生成参数和结果
+        5. [Ingredients] 生成 Reference Sheet + 静态视频
+        6. 对齐分辨率（64 的倍数）和帧数（8n+1）到 LTX-Video 要求
+        7. 将三个控制信号目录（Pose/Depth/Canny）转换为 MP4 视频
+        8. 加载双 LoRA 管线并执行 LTX 推理
+        9. 逐帧合成：生成人物区域 + 原始背景（mask 控制）
+        10. 保存合成帧到 synthetic_dir
+        11. 更新 context.json 记录生成参数和结果
 
         Returns:
             (synthetic_dir,) — 合成帧输出目录的路径字符串
@@ -826,7 +1038,8 @@ class MementoLTX:
         logger.info(f"  控制包目录:   {control_pack_dir}")
         logger.info(f"  参考图目录:   {reference_dir}")
         logger.info(f"  控制模式:     {control_mode}")
-        logger.info(f"  控制强度:     {control_strength}")
+        logger.info(f"  Union强度:    {control_strength}")
+        logger.info(f"  Ingredients:  {'启用' if ingredients_enabled else '禁用'} (strength={ingredients_strength})")
         logger.info(f"  推理步数:     {num_inference_steps}")
         logger.info(f"  随机种子:     {seed}")
         logger.info(f"  提示词:       {prompt[:120]}{'...' if len(prompt) > 120 else ''}")
@@ -876,7 +1089,37 @@ class MementoLTX:
         # ── 步骤 4: 加载角色参考图像 ──
         reference_images = load_reference_images(reference_dir)
 
-        # ── 步骤 5: 对齐分辨率和帧数 ──
+        # ── 步骤 5: [Ingredients] 生成 Reference Sheet + 静态视频 ──
+        refsheet_video_path = None
+        if ingredients_enabled:
+            logger.info("[MementoLTX] 生成 Ingredients Reference Sheet...")
+            try:
+                ref_sheet = build_reference_sheet(
+                    reference_images,
+                    sheet_width=1920,
+                    sheet_height=1080,
+                )
+                refsheet_video_path = os.path.join(
+                    "/workspace", "controls", "refsheet_ingredients.mp4"
+                )
+                os.makedirs(os.path.dirname(refsheet_video_path), exist_ok=True)
+                reference_sheet_to_static_video(
+                    ref_sheet,
+                    refsheet_video_path,
+                    num_frames,
+                    fps=original_fps,
+                )
+                logger.info(
+                    f"[MementoLTX] Ingredients Reference Sheet 视频就绪: {refsheet_video_path}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[MementoLTX] Reference Sheet 生成失败: {e}, "
+                    f"将禁用 Ingredients 约束"
+                )
+                ingredients_enabled = False
+
+        # ── 步骤 6: 对齐分辨率和帧数 ──
         h_a, w_a = align_resolution(h, w)
         num_frames_a = align_frames(num_frames, "8n+1")
         if h != h_a or w != w_a:
@@ -890,7 +1133,7 @@ class MementoLTX:
                 f"(8n+1 格式)"
             )
 
-        # ── 步骤 6: 创建输出目录 ──
+        # ── 步骤 7: 创建输出目录 ──
         synthetic_dir = "/workspace/synthetic"
         controls_dir = "/workspace/controls"
         Path(synthetic_dir).mkdir(parents=True, exist_ok=True)
@@ -900,7 +1143,7 @@ class MementoLTX:
         for old_file in Path(synthetic_dir).glob("synth_*.png"):
             old_file.unlink()
 
-        # ── 步骤 7: 控制信号目录 → MP4 视频 ──
+        # ── 步骤 8: 控制信号目录 → MP4 视频 ──
         control_dir_map = {
             "pose": heatmap_dir,
             "depth": depth_dir,
@@ -946,12 +1189,33 @@ class MementoLTX:
                 f"没有成功转换任何控制信号视频，control_mode={control_mode}"
             )
 
+        # 添加 Ingredients Reference Sheet 视频
+        if ingredients_enabled and refsheet_video_path:
+            control_videos.append((refsheet_video_path, ingredients_strength))
+            logger.info(
+                f"[MementoLTX] Ingredients Reference Sheet 已添加到控制信号: "
+                f"strength={ingredients_strength}"
+            )
+
         logger.info(
             f"[MementoLTX] 共 {len(control_videos)} 个控制信号视频准备就绪"
         )
 
-        # ── 步骤 8: 加载管线 + 执行 LTX 推理 ──
-        pipeline = self.load_pipeline(control_mode, control_strength)
+        # ── 步骤 9: 构建 Ingredients Prompt ──
+        if ingredients_enabled:
+            effective_prompt = build_ingredients_prompt(prompt)
+            logger.info(
+                f"[MementoLTX] Ingredients Prompt: "
+                f"{effective_prompt[:200]}..."
+            )
+        else:
+            effective_prompt = prompt
+
+        # ── 步骤 10: 加载管线 + 执行 LTX 推理 ──
+        pipeline = self.load_pipeline(
+            control_mode, control_strength,
+            ingredients_enabled, ingredients_strength,
+        )
 
         logger.info(
             f"[MementoLTX] 开始推理 (seed={seed}, steps={num_inference_steps}, "
@@ -968,7 +1232,7 @@ class MementoLTX:
 
         # 构建管线参数
         pipeline_kwargs = {
-            "prompt": prompt,
+            "prompt": effective_prompt,
             "seed": seed,
             "height": h_a,
             "width": w_a,
@@ -979,6 +1243,12 @@ class MementoLTX:
             "enhance_prompt": True,
             "skip_stage_2": False,
         }
+
+        # Ingredients 模式下的负向 Prompt
+        if ingredients_enabled:
+            pipeline_kwargs["negative_prompt"] = (
+                "worst quality, inconsistent motion, blurry, jittery, distorted"
+            )
 
         # 尝试传递参考图像（如果 ICLoraPipeline 支持 image 参数）
         if ref_tensors:
@@ -998,10 +1268,16 @@ class MementoLTX:
                 )
                 pipeline_kwargs.pop("image", None)
                 video_iterator, _ = pipeline(**pipeline_kwargs)
+            elif "negative_prompt" in str(type_err):
+                logger.warning(
+                    "[MementoLTX] ICLoraPipeline 不支持 'negative_prompt' 参数"
+                )
+                pipeline_kwargs.pop("negative_prompt", None)
+                video_iterator, _ = pipeline(**pipeline_kwargs)
             else:
                 raise
 
-        # ── 步骤 9: 逐帧合成（生成人物 + 原始背景） ──
+        # ── 步骤 11: 逐帧合成（生成人物 + 原始背景） ──
         frame_files = sorted([
             f for f in os.listdir(frames_dir)
             if f.lower().endswith(('.jpg', '.jpeg', '.png'))
@@ -1105,7 +1381,7 @@ class MementoLTX:
                 "[MementoLTX] 未生成任何合成帧，请检查输入数据和管线配置"
             )
 
-        # ── 步骤 10: 更新 context.json ──
+        # ── 步骤 12: 更新 context.json ──
         self._update_context(synthetic_dir, saved_count, control_mode, control_strength,
                              reference_dir, num_inference_steps, seed, w, h, prompt, metadata, total_elapsed)
 
@@ -1115,6 +1391,7 @@ class MementoLTX:
             f"  生成帧数:   {saved_count}\n"
             f"  背景策略:   保持原始（通过 mask 合成）\n"
             f"  控制模式:   {control_mode}\n"
+            f"  Ingredients: {'启用' if ingredients_enabled else '禁用'}\n"
             f"  参考图像:   {len(reference_images)} 张"
         )
 
@@ -1175,6 +1452,8 @@ class MementoLTX:
         metadata_json: str,        # 08_metadata_json
         control_mode: str,
         control_strength: float,
+        ingredients_enabled: bool,
+        ingredients_strength: float,
         num_inference_steps: int,
         seed: int,
         control_sources: str = "",  # hidden parameter — documentation only
@@ -1189,7 +1468,8 @@ class MementoLTX:
         """
         logger.info(
             f"[MementoLTX] generate: tensor_ops={self._use_tensor_ops}, "
-            f"mode={control_mode}, strength={control_strength}"
+            f"mode={control_mode}, strength={control_strength}, "
+            f"ingredients={'on' if ingredients_enabled else 'off'}"
         )
 
         if self._use_tensor_ops and _TENSOR_OPS_AVAILABLE:
@@ -1197,7 +1477,8 @@ class MementoLTX:
                 return self._generate_tensor_ops(
                     frames_dir, mask_dir, heatmap_dir, depth_dir,
                     control_pack_dir, reference_dir, prompt, metadata_json,
-                    control_mode, control_strength, num_inference_steps, seed,
+                    control_mode, control_strength, ingredients_enabled,
+                    ingredients_strength, num_inference_steps, seed,
                 )
             except Exception as e:
                 logger.warning(
@@ -1208,7 +1489,8 @@ class MementoLTX:
         return self._generate_file_based(
             frames_dir, mask_dir, heatmap_dir, depth_dir,
             control_pack_dir, reference_dir, prompt, metadata_json,
-            control_mode, control_strength, num_inference_steps, seed,
+            control_mode, control_strength, ingredients_enabled,
+            ingredients_strength, num_inference_steps, seed,
         )
 
 
