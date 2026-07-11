@@ -74,9 +74,22 @@ class MementoPose2D:
             "required": {
                 "frames_dir": ("STRING", {"default": "", "multiline": False}),
                 "mask_dir": ("STRING", {"default": "", "multiline": False}),
-                "min_detection_confidence": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "min_tracking_confidence": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "heatmap_sigma": ("FLOAT", {"default": 6.0, "min": 1.0, "max": 20.0, "step": 1.0}),
+                "model_complexity": ("INT", {
+                    "default": 2, "min": 0, "max": 2, "step": 1,
+                    "tooltip": "0=轻量(最快), 1=平衡, 2=完整(最准)",
+                }),
+                "min_detection_confidence": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "检测最小置信度，远距离/遮挡可降至 0.3",
+                }),
+                "min_tracking_confidence": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "追踪最小置信度，提高可增加鲁棒性",
+                }),
+                "heatmap_sigma": ("FLOAT", {
+                    "default": 6.0, "min": 1.0, "max": 20.0, "step": 1.0,
+                    "tooltip": "热力图模糊半径，越小控制越严格",
+                }),
             },
         }
 

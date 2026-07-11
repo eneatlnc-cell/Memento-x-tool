@@ -318,6 +318,11 @@ class MementoRAFT:
                     "BOOLEAN",
                     {"default": True},
                 ),
+                "raft_iters": (
+                    "INT",
+                    {"default": 20, "min": 4, "max": 32, "step": 1,
+                     "tooltip": "RAFT 迭代次数，20=推荐，12=快速，32=最高精度"},
+                ),
             },
         }
 

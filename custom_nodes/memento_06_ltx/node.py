@@ -683,6 +683,20 @@ class MementoLTX:
                     "step": 1,
                     "tooltip": "随机种子（固定种子可复现结果）",
                 }),
+                "guidance_scale": ("FLOAT", {
+                    "default": 4.0,
+                    "min": 1.0,
+                    "max": 15.0,
+                    "step": 0.5,
+                    "tooltip": "CFG 引导强度，3-5=修复推荐，7-9=创意生成",
+                }),
+                "stg_scale": ("FLOAT", {
+                    "default": 3.0,
+                    "min": 0.0,
+                    "max": 10.0,
+                    "step": 0.5,
+                    "tooltip": "STG 时空引导，3.0=动态场景推荐，1.5=静态场景",
+                }),
             },
             "hidden": {
                 "control_sources": ("STRING", {

@@ -43,6 +43,22 @@ class MementoSegment:
             "required": {
                 "frames_dir": ("STRING", {"default": "", "multiline": False}),
                 "click_points": ("STRING", {"default": "[]", "multiline": False}),
+                "score_threshold_detection": ("FLOAT", {
+                    "default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05,
+                    "tooltip": "SAM3 检测置信度阈值，降低可检测更多目标",
+                }),
+                "pred_iou_thresh": ("FLOAT", {
+                    "default": 0.88, "min": 0.5, "max": 1.0, "step": 0.02,
+                    "tooltip": "掩码质量阈值，降低保留更多掩码",
+                }),
+                "stability_score_thresh": ("FLOAT", {
+                    "default": 0.95, "min": 0.5, "max": 1.0, "step": 0.01,
+                    "tooltip": "掩码稳定性阈值，提高得到更稳定边缘",
+                }),
+                "recondition_every_nth_frame": ("INT", {
+                    "default": 16, "min": 0, "max": 60, "step": 1,
+                    "tooltip": "重条件化间隔帧数，0=禁用，值越小追踪越稳定",
+                }),
             },
         }
 

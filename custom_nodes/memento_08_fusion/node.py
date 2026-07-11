@@ -80,6 +80,22 @@ class MementoFusion:
                     "multiline": False,
                     "placeholder": "Path to 04 depth maps"
                 }),
+                "blend_alpha": ("FLOAT", {
+                    "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "融合透明度，Result = FG*alpha + BG*(1-alpha)",
+                }),
+                "feather_radius": ("INT", {
+                    "default": 10, "min": 0, "max": 30, "step": 1,
+                    "tooltip": "边缘羽化半径(像素)，0=硬边缘，10=推荐",
+                }),
+                "shadow_strength": ("FLOAT", {
+                    "default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "深度阴影强度，0.3-0.5=自然阴影",
+                }),
+                "color_match_strength": ("FLOAT", {
+                    "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "颜色匹配强度，0.5-0.8=推荐",
+                }),
             },
         }
 

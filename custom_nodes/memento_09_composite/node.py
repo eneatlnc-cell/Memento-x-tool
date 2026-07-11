@@ -83,6 +83,15 @@ class MementoComposite:
                     "step": 1,
                     "display": "number",
                 }),
+                "crf": ("INT", {
+                    "default": 18, "min": 0, "max": 51, "step": 1,
+                    "tooltip": "编码质量 CRF，18=视觉无损，23=标准，28=压缩",
+                }),
+                "preset": (
+                    ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
+                    {"default": "medium",
+                     "tooltip": "编码速度预设，越慢文件越小质量越高"},
+                ),
             },
         }
 
