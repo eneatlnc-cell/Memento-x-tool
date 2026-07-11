@@ -275,25 +275,14 @@ def _load_ltx_pipeline(
         total_mem = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
         logger.info(f"[sub.06] GPU: {gpu_name}, total VRAM: {total_mem:.1f} GB")
 
-    iclora_map = {
-        "pose":  os.path.join(iclora_dir, "ltx-video-iclora-pose-13b-0.9.7.safetensors"),
-        "depth": os.path.join(iclora_dir, "ltx-video-iclora-depth-13b-0.9.7.safetensors"),
-        "canny": os.path.join(iclora_dir, "ltx-video-iclora-canny-13b-0.9.7.safetensors"),
-    }
+    union_lora_path = os.path.join(iclora_dir, "ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors")
+    if not os.path.exists(union_lora_path):
+        raise FileNotFoundError(f"IC-LoRA Union Control not found: {union_lora_path}")
 
-    loras = []
-    for mode_key, lora_path in iclora_map.items():
-        if mode_key in control_mode:
-            if os.path.exists(lora_path):
-                loras.append(
-                    LoraPathStrengthAndSDOps(path=lora_path, strength=control_strength)
-                )
-                logger.info(f"[sub.06] IC-LoRA added: {mode_key} (strength={control_strength})")
-            else:
-                logger.warning(f"[sub.06] IC-LoRA not found: {lora_path}, skipping {mode_key}")
-
-    if not loras:
-        raise RuntimeError(f"No IC-LoRA models available for control_mode={control_mode}")
+    loras = [
+        LoraPathStrengthAndSDOps(path=union_lora_path, strength=control_strength)
+    ]
+    logger.info(f"[sub.06] IC-LoRA Union Control loaded (depth+canny+pose 三合一, mode={control_mode})")
 
     start = time.time()
     pipeline = ICLoraPipeline(

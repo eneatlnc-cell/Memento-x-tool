@@ -408,10 +408,10 @@ class MementoLTX:
 
     使用 LTX-2 原生 ICLoraPipeline：
     - 主模型: /models/ltx/ltx-2.3-22b-dev-fp8.safetensors
-    - IC-LoRA: /models/iclora/ 下的 pose/depth/canny 适配器
+    - IC-LoRA: /models/iclora/ 下的 Union Control 三合一适配器 (depth+canny+pose)
     - 控制信号: Pose/Depth/Canny 三个预计算 MP4 视频
     - 参考图像: 角色 B 的 5 视角参考图
-    - 显存: FP8 量化约 10GB（主模型）+ IC-LoRA 开销
+    - 显存: FP8 量化约 10GB（主模型）+ IC-LoRA 654MB
 
     核心行为：
     - 背景保持原始不变（通过 mask 合成实现）
@@ -421,9 +421,7 @@ class MementoLTX:
 
     # ── 模型路径 ──
     MAIN_MODEL = "/models/ltx/ltx-2.3-22b-dev-fp8.safetensors"
-    ICLORA_POSE = "/models/iclora/ltx-video-iclora-pose-13b-0.9.7.safetensors"
-    ICLORA_DEPTH = "/models/iclora/ltx-video-iclora-depth-13b-0.9.7.safetensors"
-    ICLORA_CANNY = "/models/iclora/ltx-video-iclora-canny-13b-0.9.7.safetensors"
+    ICLORA_UNION = "/models/iclora/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"
 
     # 管线缓存: key=(control_mode, control_strength) → pipeline 实例
     # 不同控制模式需要不同的 IC-LoRA 组合，因此按组合缓存
@@ -579,42 +577,23 @@ class MementoLTX:
                 f"请先运行 bash download_models.sh 下载模型"
             )
 
-        # 构建 IC-LoRA 列表
-        iclora_map = {
-            "pose": cls.ICLORA_POSE,
-            "depth": cls.ICLORA_DEPTH,
-            "canny": cls.ICLORA_CANNY,
-        }
-
-        loras = []
-        for mode_key, lora_path in iclora_map.items():
-            if mode_key in control_mode:
-                if os.path.exists(lora_path):
-                    loras.append(
-                        LoraPathStrengthAndSDOps(
-                            path=lora_path,
-                            strength=control_strength,
-                        )
-                    )
-                    logger.info(
-                        f"[MementoLTX] 已添加 IC-LoRA: {mode_key} "
-                        f"(strength={control_strength}, path={Path(lora_path).name})"
-                    )
-                else:
-                    logger.warning(
-                        f"[MementoLTX] IC-LoRA 模型不存在: {lora_path}, "
-                        f"跳过 {mode_key} 控制"
-                    )
-
-        if not loras:
-            raise RuntimeError(
-                f"没有可用的 IC-LoRA 模型，control_mode={control_mode}\n"
-                f"请检查 /models/iclora/ 目录下的模型文件是否完整"
+        # 构建 IC-LoRA 列表 (Union Control 三合一，单文件覆盖 depth/canny/pose)
+        if not os.path.exists(cls.ICLORA_UNION):
+            raise FileNotFoundError(
+                f"IC-LoRA Union Control 模型不存在: {cls.ICLORA_UNION}\n"
+                f"请先运行 bash download_models.sh 下载模型"
             )
 
+        loras = [
+            LoraPathStrengthAndSDOps(
+                path=cls.ICLORA_UNION,
+                strength=control_strength,
+            )
+        ]
+
         logger.info(
-            f"[MementoLTX] 加载 LTX-Video 2.3 + {len(loras)} 个 IC-LoRA: "
-            f"{control_mode}"
+            f"[MementoLTX] 加载 LTX-Video 2.3 + IC-LoRA Union Control "
+            f"(depth+canny+pose 三合一, mode={control_mode})"
         )
 
         # 初始化 ICLoraPipeline

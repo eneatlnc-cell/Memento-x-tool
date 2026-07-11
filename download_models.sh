@@ -69,28 +69,17 @@ hf_hub_download(
 )
 " && log "LTX-Video 2.3 主模型 ✓" || { log "LTX-Video 2.3 下载失败"; exit 1; }
 
-# ── 6. IC-LoRA 控制模型 (HuggingFace) ──
-log "下载 IC-LoRA 控制模型 (共约 25GB，pose+depth+canny)..."
-ICLORA_MODELS=(
-    "Lightricks/LTX-Video-ICLoRA-pose:ltx-video-iclora-pose-13b-0.9.7.safetensors"
-    "Lightricks/LTX-Video-ICLoRA-depth:ltx-video-iclora-depth-13b-0.9.7.safetensors"
-    "Lightricks/LTX-Video-ICLoRA-canny:ltx-video-iclora-canny-13b-0.9.7.safetensors"
-)
-for entry in "${ICLORA_MODELS[@]}"; do
-    repo="${entry%%:*}"
-    filename="${entry##*:}"
-    log "  下载 $filename ..."
-    retry python3 -c "
+# ── 6. IC-LoRA Union Control 量化三合一 (HuggingFace) ──
+log "下载 IC-LoRA Union Control (depth+canny+pose 三合一，约 654MB)..."
+retry python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    repo_id='$repo',
-    filename='$filename',
+    repo_id='Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
+    filename='ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors',
     local_dir='$MODEL_DIR/iclora',
     local_dir_use_symlinks=False,
 )
-" && log "  $filename ✓" || { log "IC-LoRA 下载失败: $filename"; exit 1; }
-done
-log "IC-LoRA 全部控制模型 ✓"
+" && log "IC-LoRA Union Control ✓" || { log "IC-LoRA Union Control 下载失败"; exit 1; }
 
 # ── 7. RAFT 光流模型 (torchvision 预训练权重) ──
 log "预下载 RAFT 光流模型权重..."
