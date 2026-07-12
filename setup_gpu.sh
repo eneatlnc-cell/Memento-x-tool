@@ -2,7 +2,7 @@
 # ============================================================
 # Memento GPU Worker 一键部署脚本
 # 在 GPU 云实例上执行，自动完成所有环境配置
-# 使用国内镜像源，速度快
+# 使用国内镜像源，兼容云GPU预装环境（conda PyTorch）
 # ============================================================
 set -euo pipefail
 
@@ -28,10 +28,13 @@ else
     git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$COMFYUI_DIR"
 fi
 
-# ── 3. 安装 ComfyUI 依赖（国内镜像） ──
-log "安装 ComfyUI 依赖..."
+# ── 3. 安装 ComfyUI 依赖（--no-deps 避免重装 PyTorch）──
+log "安装 ComfyUI 依赖（跳过已有 PyTorch）..."
 cd "$COMFYUI_DIR"
-pip install -r requirements.txt
+pip install --no-deps -r requirements.txt 2>/dev/null || pip install -r requirements.txt
+# 补装漏掉的传递依赖
+python3 -c "import cv2" 2>/dev/null || pip install opencv-python
+python3 -c "import PIL" 2>/dev/null || pip install Pillow
 
 # ── 4. 克隆 Memento 工具链 ──
 log "克隆 Memento 工具链..."
@@ -43,7 +46,7 @@ else
 fi
 
 # ── 5. 下载模型 ──
-log "下载模型权重..."
+log "下载模型权重（HF 镜像: $HF_MIRROR）..."
 cd "$TOOL_DIR"
 export HF_ENDPOINT="$HF_MIRROR"
 bash download_models.sh
