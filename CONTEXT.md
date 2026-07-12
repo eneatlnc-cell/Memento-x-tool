@@ -102,7 +102,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 | 节点 | 工具 | 功能 |
 |------|------|------|
 | 1. 预处理 | FFmpeg | H.264/HEVC → 帧序列，分辨率适配 |
-| 2. 时序分割 | SAM3-Large | 时序一致性分割，像素级 Mask |
+| 2. 时序分割 | SAM2.1-Hiera-Large | 时序一致性分割，像素级 Mask |
 | 3. 2D 骨骼 | MediaPipe | 33 关键点提取 |
 | 4. 3D 归一化 | MotionBERT | 3D 人体姿态归一化，防抖动 |
 | 5. 四通道编码 | QuadMask（自研） | 四通道特征编码，多人物深度分层 |
@@ -220,7 +220,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 - **ECS 部署**：118.31.189.101:8000，systemd 开机自启
 
 ### 阶段二：核心闭环（M11-M12.5）— 约 4-6 周
-- **M11 算力引擎**：ComfyUI headless 部署 + SAM3/MediaPipe/MotionBERT/RAFT 模型集成
+- **M11 算力引擎**：ComfyUI headless 部署 + SAM2.1/MediaPipe/MotionBERT/RAFT 模型集成
 - **M12 渲染管线**：9 节点 custom_nodes 开发 + 管线联调
 - **M12.5 窗口化流处理**：重叠切割 + 上下文缓存 + 速度继承 + 光流扭曲 + 缓存滚动
 
@@ -259,7 +259,7 @@ Web 端 WebSocket 实时显示进度 → 成片预览 → 下载
 9. **AIGC 定位**：差异化在于**可控性**（坐标驱动确定性合成），而非操作难度
 10. **战略调整**：App 暂缓，主攻三大核心仓库
 11. **界面哲学**：像 Instagram 滤镜一样简单，不像 ComfyUI 那样暴露管线
-12. **管线升级**：SAM2→SAM3，RIFE→RAFT，新增 MotionBERT 3D 归一化 + QuadMask 四通道编码 + LTX-Video 2.3 + IC-LoRA 多特征融合渲染（内置姿态/掩码/深度控制，无需外挂 ControlNet）
+12. **管线升级**：SAM2→SAM2.1，RIFE→RAFT，新增 MotionBERT 3D 归一化 + QuadMask 四通道编码 + LTX-Video 2.3 + IC-LoRA 多特征融合渲染（内置姿态/掩码/深度控制，无需外挂 ControlNet）
 
 ---
 

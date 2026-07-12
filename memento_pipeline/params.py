@@ -66,12 +66,12 @@ PIPELINE_PARAMS: List[ParamDef] = [
         tooltip="分辨率越高生成质量越好，但显存和推理时间成倍增长",
     ),
 
-    # ── 02 SAM3 分割 ──
+    # ── 02 SAM2.1 分割 ──
     ParamDef(
         id="score_threshold_detection", node="02_segment", label="检测置信度阈值",
         default=0.5, type="float", group=ParamGroup.ADVANCED,
         range_min=0.1, range_max=1.0, step=0.05,
-        description="SAM3 检测器输出概率阈值，低于此值的检测结果将被丢弃",
+        description="SAM2.1 检测器输出概率阈值，低于此值的检测结果将被丢弃",
         tooltip="降低可检测到更多目标（但可能误检），提高可减少误检（但可能漏检）",
     ),
     ParamDef(

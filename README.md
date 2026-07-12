@@ -54,7 +54,7 @@ docker push mementoweb/memento-tool:latest
 
 - ComfyUI headless（官方最新稳定版）
 - 9 个 Memento custom_nodes（管线骨架）
-- 所有模型权重预置（SAM3 / MotionBERT / LTX-Video 2.3 + IC-LoRA / RAFT）
+- 所有模型权重预置（SAM2.1 / MotionBERT / LTX-Video 2.3 + IC-LoRA / RAFT）
 - 无运行时下载操作
 
 ## 目录结构

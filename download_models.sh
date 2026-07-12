@@ -2,7 +2,7 @@
 # ============================================================
 # Memento 模型下载脚本
 # 下载所有 9 节点管线所需的模型权重到 ./models/
-# 使用 HuggingFace 镜像 hf-mirror.com 加速
+# 使用国内镜像源加速（HuggingFace / Meta 官方直链）
 # 重试 3 次，失败则退出
 # ============================================================
 set -euo pipefail
@@ -11,7 +11,7 @@ MODEL_DIR="./models"
 MAX_RETRIES=3
 LOG_FILE="./download_models.log"
 
-mkdir -p "$MODEL_DIR"/{sam3,mediapipe,motionbert,ltx,iclora,raft}
+mkdir -p "$MODEL_DIR"/{sam2,mediapipe,motionbert,ltx,iclora,raft}
 
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
@@ -30,34 +30,28 @@ retry() {
     log "$desc ✓"
 }
 
-# ── 1. 安装 huggingface_hub ──
-log "安装 huggingface_hub..."
-pip install --quiet huggingface_hub
+# ── 1. SAM2（Meta 官方直链，无需认证，完全开放）──
+log "下载 SAM2 模型权重 (sam2.1_hiera_large.pt, 约 900MB)..."
+if [ ! -d "/opt/sam2" ]; then
+    log "克隆 SAM2 源码..."
+    retry "SAM2源码" git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2
+    pip install --quiet -e /opt/sam2
+fi
+SAM2_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
+retry "SAM2权重" wget -q --show-progress -O "$MODEL_DIR/sam2/sam2.1_hiera_large.pt" "$SAM2_URL"
 
-# ── 2. SAM3 ──
-log "下载 SAM3 模型权重..."
-retry "SAM3" python3 -c "$(cat << 'PYEOF'
-from huggingface_hub import snapshot_download
-snapshot_download(
-    "facebook/sam3",
-    local_dir="./models/sam3",
-    local_dir_use_symlinks=False,
-    allow_patterns=["sam3.safetensors", "*.json", "*.txt", "*.yaml"],
-)
-PYEOF
-)"
-
-# ── 3. MediaPipe ──
+# ── 2. MediaPipe ──
 log "安装 MediaPipe..."
 retry "MediaPipe" pip install --quiet mediapipe
 
-# ── 4. MotionBERT ──
+# ── 3. MotionBERT ──
 log "下载 MotionBERT..."
 MOTIONBERT_URL="https://github.com/Walter0807/MotionBERT/releases/download/v1.0.0/motionbert_ft_h36m.pth"
 retry "MotionBERT" wget -q --show-progress -O "$MODEL_DIR/motionbert/motionbert_ft_h36m.pth" "$MOTIONBERT_URL"
 
-# ── 5. LTX-Video 2.3 主模型 ──
+# ── 4. LTX-Video 2.3 主模型 (HuggingFace) ──
 log "下载 LTX-Video 2.3 主模型 (约 10GB，FP8 量化)..."
+pip install --quiet huggingface_hub
 retry "LTX-Video" python3 -c "$(cat << 'PYEOF'
 from huggingface_hub import hf_hub_download
 hf_hub_download(
@@ -69,7 +63,7 @@ hf_hub_download(
 PYEOF
 )"
 
-# ── 6. IC-LoRA Union Control ──
+# ── 5. IC-LoRA Union Control ──
 log "下载 IC-LoRA Union Control (三合一控制，约 654MB)..."
 retry "Union Control" python3 -c "$(cat << 'PYEOF'
 from huggingface_hub import hf_hub_download
@@ -82,7 +76,7 @@ hf_hub_download(
 PYEOF
 )"
 
-# ── 7. IC-LoRA Ingredients ──
+# ── 6. IC-LoRA Ingredients ──
 log "下载 IC-LoRA Ingredients (角色一致性约束)..."
 retry "Ingredients" python3 -c "$(cat << 'PYEOF'
 from huggingface_hub import hf_hub_download
@@ -95,7 +89,7 @@ hf_hub_download(
 PYEOF
 )"
 
-# ── 8. RAFT 光流模型 ──
+# ── 7. RAFT 光流模型 ──
 log "预下载 RAFT 光流模型权重..."
 retry "RAFT" python3 -c "$(cat << 'PYEOF'
 import torch, torchvision

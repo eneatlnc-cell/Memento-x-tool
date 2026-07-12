@@ -1,4 +1,4 @@
-"""Memento 02 — SAM3 视频时序分割节点
+"""Memento 02 — SAM2.1 视频时序分割节点
 
 输入: 01 输出的 30fps 原始帧
 输出: 逐帧人物蒙版 Mask（四层 SVG 遮罩底层数据源）
@@ -9,7 +9,7 @@
   Layer 2: 发丝/细节层（高阈值边缘保留）
   Layer 3: 半透明区域（烟雾/玻璃/动态模糊）
 
-SAM3 = Meta Segment Anything Model 3（统一图像+视频分割，支持概念提示）
+SAM2.1 = Meta Segment Anything Model 2.1（Apache 2.0，完全开放，无需申请）
 """
 import logging
 import json
@@ -23,18 +23,18 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# SAM3 导入（pip install sam3 预装在容器中）
 try:
-    from sam3.model_builder import build_sam3_video_model
+    from sam2.build_sam import build_sam2_video_predictor
 except ImportError as e:
-    logger.error(f"[MementoSegment] SAM3 import failed: {e}")
+    logger.error(f"[MementoSegment] SAM2 import failed: {e}")
     raise
 
 
 class MementoSegment:
-    """节点 2: 时序分割 — SAM3 像素级 Mask + 四层 SVG 遮罩"""
+    """节点 2: 时序分割 — SAM2.1 像素级 Mask + 四层 SVG 遮罩"""
 
-    CHECKPOINT_PATH = "/models/sam3/sam3.safetensors"
+    CHECKPOINT_PATH = "/models/sam2/sam2.1_hiera_large.pt"
+    MODEL_CFG = "sam2.1_hiera_l.yaml"
     _predictor = None
 
     @classmethod
@@ -45,7 +45,7 @@ class MementoSegment:
                 "click_points": ("STRING", {"default": "[]", "multiline": False}),
                 "score_threshold_detection": ("FLOAT", {
                     "default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05,
-                    "tooltip": "SAM3 检测置信度阈值，降低可检测更多目标",
+                    "tooltip": "SAM2 检测置信度阈值，降低可检测更多目标",
                 }),
                 "pred_iou_thresh": ("FLOAT", {
                     "default": 0.88, "min": 0.5, "max": 1.0, "step": 0.02,
@@ -75,20 +75,19 @@ class MementoSegment:
         start_time = time.time()
         if not os.path.exists(cls.CHECKPOINT_PATH):
             raise FileNotFoundError(
-                f"SAM3 模型不存在: {cls.CHECKPOINT_PATH}\n"
+                f"SAM2.1 模型不存在: {cls.CHECKPOINT_PATH}\n"
                 f"请先运行 bash download_models.sh 下载模型"
             )
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"[MementoSegment] 加载 SAM3 到 {device}...")
+        logger.info(f"[MementoSegment] 加载 SAM2.1 到 {device}...")
 
-        sam3_model = build_sam3_video_model(checkpoint_path=cls.CHECKPOINT_PATH)
-        predictor = sam3_model.tracker
-        predictor.backbone = sam3_model.detector.backbone
-        predictor.to(device)
+        predictor = build_sam2_video_predictor(
+            cls.MODEL_CFG, cls.CHECKPOINT_PATH, device=device,
+        )
 
         elapsed = time.time() - start_time
-        logger.info(f"[MementoSegment] SAM3 加载完成，耗时 {elapsed:.1f}s")
+        logger.info(f"[MementoSegment] SAM2.1 加载完成，耗时 {elapsed:.1f}s")
 
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
@@ -106,35 +105,20 @@ class MementoSegment:
             raise
 
     def generate_four_layer_svg_mask(self, mask_bin: np.ndarray) -> dict:
-        """
-        从二值掩码生成四层 SVG 遮罩数据
-
-        四层结构:
-          Layer 0: 人物前景蒙版（二值）
-          Layer 1: 边缘羽化层（高斯模糊 σ=3）
-          Layer 2: 发丝/细节层（拉普拉斯高频边缘保留）
-          Layer 3: 半透明区域（形态学膨胀-腐蚀差值）
-
-        返回 dict 包含各层数据的 numpy 数组和 SVG 风格描述
-        """
         h, w = mask_bin.shape
         layers = {}
 
-        # Layer 0: 二值前景蒙版
         layers["layer_0_foreground"] = mask_bin.copy()
 
-        # Layer 1: 边缘羽化层（高斯模糊 3px）
         mask_float = mask_bin.astype(np.float32) / 255.0
         feather = cv2.GaussianBlur(mask_float, (7, 7), 3.0)
         layers["layer_1_feather"] = (feather * 255).astype(np.uint8)
 
-        # Layer 2: 发丝/细节层（拉普拉斯高通 → 阈值保留高频边缘）
         laplacian = cv2.Laplacian(mask_float, cv2.CV_32F, ksize=3)
         laplacian = np.abs(laplacian)
         detail = np.clip(laplacian * 5.0, 0, 1.0)
         layers["layer_2_detail"] = (detail * 255).astype(np.uint8)
 
-        # Layer 3: 半透明区域（膨胀-腐蚀差值 = 边缘过渡带）
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         dilated = cv2.dilate(mask_bin, kernel, iterations=1)
         eroded = cv2.erode(mask_bin, kernel, iterations=1)
@@ -156,23 +140,19 @@ class MementoSegment:
         if not frame_files:
             raise RuntimeError(f"帧目录为空: {frames_dir}")
 
-        # 创建输出目录
         mask_dir = "/workspace/masks"
         svg_mask_dir = "/workspace/masks_svg"
         Path(mask_dir).mkdir(parents=True, exist_ok=True)
         Path(svg_mask_dir).mkdir(parents=True, exist_ok=True)
 
-        # 读取第一帧获取尺寸
         first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
         if first_frame is None:
             raise RuntimeError(f"无法读取第一帧: {frames_dir}/{frame_files[0]}")
         h, w = first_frame.shape[:2]
         logger.info(f"[MementoSegment] {len(frame_files)} 帧, 尺寸 {w}x{h}")
 
-        # 加载 SAM3
         predictor = self.load_model()
 
-        # 初始化推理状态
         logger.info("[MementoSegment] 初始化推理状态（加载所有帧）...")
         init_start = time.time()
         inference_state = predictor.init_state(video_path=frames_dir)
@@ -180,7 +160,6 @@ class MementoSegment:
             f"[MementoSegment] 推理状态初始化完成，耗时 {time.time() - init_start:.1f}s"
         )
 
-        # 解析点击点
         points_data = self.parse_click_points(click_points)
         if not points_data:
             raise RuntimeError("没有提供点击坐标，至少需要一个正样本点")
@@ -188,50 +167,40 @@ class MementoSegment:
         point_coords = []
         point_labels = []
         for p in points_data:
-            point_coords.append([p["x"] / w, p["y"] / h])
+            point_coords.append([p["x"], p["y"]])
             point_labels.append(p.get("label", 1))
 
-        points_tensor = torch.tensor(point_coords, dtype=torch.float32)
-        points_labels_tensor = torch.tensor(point_labels, dtype=torch.int32)
-
-        # 在第一帧添加点击
         logger.info(f"[MementoSegment] 添加 {len(point_coords)} 个点到第一帧")
-        _, out_obj_ids, low_res_masks, video_res_masks = predictor.add_new_points(
-            inference_state=inference_state,
+        _, out_obj_ids, masks = predictor.add_new_points_or_box(
+            inference_state,
             frame_idx=0,
             obj_id=1,
-            points=points_tensor,
-            labels=points_labels_tensor,
-            clear_old_points=False,
+            points=point_coords,
+            labels=point_labels,
         )
 
-        # 时序传播
         logger.info("[MementoSegment] 开始时序传播...")
         prop_start = time.time()
         saved_count = 0
 
-        for frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores in predictor.propagate_in_video(
-            inference_state,
-            start_frame_idx=0,
-            max_frame_num_to_track=len(frame_files),
-            reverse=False,
-            propagate_preflight=True,
-        ):
+        for frame_idx, obj_ids, out_masks in predictor.propagate_in_video(inference_state):
             if 1 in obj_ids:
                 idx_in_list = obj_ids.index(1)
-                mask = (video_res_masks[idx_in_list] > 0.0).cpu().numpy()
+                mask = (out_masks[idx_in_list] > 0.0).cpu().numpy()
+                if mask.ndim == 3:
+                    mask = mask[0]
                 mask_uint8 = (mask * 255).astype(np.uint8)
 
-                # 保存二值掩码 PNG
                 out_path = os.path.join(mask_dir, f"mask_{frame_idx+1:05d}.png")
                 cv2.imwrite(out_path, mask_uint8)
 
-                # 生成四层 SVG 遮罩数据
                 svg_layers = self.generate_four_layer_svg_mask(mask_uint8)
                 svg_out = os.path.join(svg_mask_dir, f"svg_{frame_idx+1:05d}.npz")
                 np.savez_compressed(svg_out, **svg_layers)
 
                 saved_count += 1
+
+        predictor.reset_state(inference_state)
 
         elapsed = time.time() - prop_start
         logger.info(
@@ -239,7 +208,6 @@ class MementoSegment:
             f"(含四层 SVG 遮罩)，耗时 {elapsed:.1f}s"
         )
 
-        # 更新 context.json
         context_path = "/workspace/context.json"
         context = {}
         if os.path.exists(context_path):
@@ -263,4 +231,4 @@ class MementoSegment:
 
 
 NODE_CLASS_MAPPINGS = {"MementoSegment": MementoSegment}
-NODE_DISPLAY_NAME_MAPPINGS = {"MementoSegment": "Memento 02 - SAM3 时序分割"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MementoSegment": "Memento 02 - SAM2.1 时序分割"}

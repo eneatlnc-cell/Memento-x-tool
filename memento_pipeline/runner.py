@@ -3,7 +3,7 @@
 核心架构:
   01 FFmpeg 流式解码 → 30帧分片
   ├─ 分片循环 (02→03→04→05→06)
-  │   ├─ 02 SAM3 分割 (GPU tensor in/out)
+  │   ├─ 02 SAM2.1 分割 (GPU tensor in/out)
   │   ├─ 03 MediaPipe 2D 姿态 (GPU tensor in/out)
   │   ├─ 04 MotionBERT 3D (GPU tensor in/out)
   │   ├─ 05 控制信号对齐 (GPU tensor in/out)
@@ -194,7 +194,7 @@ class PipelineRunner:
 
             frames_chunk = frames_chunk.to(device)
 
-            # ── 02 SAM3 分割 ──
+            # ── 02 SAM2.1 分割 ──
             t = time.time()
             if self.click_points:
                 masks = segment_video(frames_chunk, self.click_points, device)
@@ -204,7 +204,7 @@ class PipelineRunner:
                 masks = torch.ones(n_frames, 1, h, w, device=device)
             self.stats["stage_times"].setdefault("02_segment", 0)
             self.stats["stage_times"]["02_segment"] += time.time() - t
-            logger.info(f"    02 SAM3: {masks.shape} ({(time.time()-t):.1f}s)")
+            logger.info(f"    02 SAM2.1: {masks.shape} ({(time.time()-t):.1f}s)")
 
             # ── 03 MediaPipe 2D 姿态 ──
             t = time.time()

@@ -5,5 +5,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MementoSegment": "Memento 02 - SAM3 时序分割",
+    "MementoSegment": "Memento 02 - SAM2.1 时序分割",
 }

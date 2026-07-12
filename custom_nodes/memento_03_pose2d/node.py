@@ -2,7 +2,7 @@
 
 输入:
   - 01 原始 30fps 帧 (frames_dir)
-  - 02 人物 Mask (mask_dir) — 来自 SAM3 视频分割
+  - 02 人物 Mask (mask_dir) — 来自 SAM2.1 视频分割
 
 输出:
   - Pose 骨骼热力图（每帧一张热力图 PNG）
@@ -14,7 +14,7 @@
   - 骨骼热力图仅在 Mask 区域内绘制
 
 控制信号来源:
-  - Mask  → 来自 02 SAM3 视频分割
+  - Mask  → 来自 02 SAM2.1 视频分割
   - 原始帧 → 来自 01 原始 30fps 帧
 """
 import logging

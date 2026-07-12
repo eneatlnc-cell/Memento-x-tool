@@ -42,8 +42,8 @@ else
     git clone --depth 1 https://github.com/eneatlnc-cell/Memento-x-tool.git "$TOOL_DIR"
 fi
 
-# ── 5. 下载模型（HF 镜像） ──
-log "下载模型权重（使用 HuggingFace 镜像 hf-mirror.com）..."
+# ── 5. 下载模型 ──
+log "下载模型权重..."
 cd "$TOOL_DIR"
 export HF_ENDPOINT="$HF_MIRROR"
 bash download_models.sh

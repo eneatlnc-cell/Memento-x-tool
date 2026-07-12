@@ -20,7 +20,7 @@
     runner.py           ← 主编排器 (分片循环 + 显存管理)
     stream_decoder.py   ← FFmpeg 流式解码器
     ops/
-      __init__.py       ← 02-05 GPU 张量操作 (SAM3/MediaPipe/MotionBERT/Align)
+      __init__.py       ← 02-05 GPU 张量操作 (SAM2.1/MediaPipe/MotionBERT/Align)
       sub.py            ← 06-09 GPU 张量操作 (LTX/RAFT/Fusion/Composite)
 """
 from .runner import PipelineRunner, run_pipeline

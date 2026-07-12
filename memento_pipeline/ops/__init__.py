@@ -5,7 +5,7 @@ All functions accept torch.Tensor and return torch.Tensor (or torch.Tensor + dic
 No file I/O except model loading.  Module-level singleton caches for all models.
 
 Nodes:
-  02 — SAM3 Video Segmentation
+  02 — SAM2.1 Video Segmentation
   03 — MediaPipe 2D Pose Detection + Heatmap
   04 — MotionBERT 2D→3D Lifting + Depth Map
   05 — Align Control Signals (4-channel control pack)
@@ -201,7 +201,7 @@ class SimplePoseLifter(nn.Module):
 
 
 # ===================================================================
-# 02 — SAM3 Video Segmentation
+# 02 — SAM2 Video Segmentation
 # ===================================================================
 
 
@@ -211,7 +211,9 @@ def segment_video(
     device: str = "cuda",
 ) -> torch.Tensor:
     """
-    Run SAM3 video segmentation on a sequence of frames.
+    Run SAM2.1 video segmentation on a sequence of frames.
+
+    SAM2.1 Hiera-Large — Apache 2.0 license, fully open, no auth required.
 
     Args:
         frames:      (N, 3, H, W) float32 [0, 1].
@@ -221,7 +223,7 @@ def segment_video(
     Returns:
         masks: (N, 1, H, W) float32 [0, 1] binary segmentation masks.
     """
-    logger.info("SAM3 segment_video: %d frames, %d click points", frames.shape[0], len(click_points))
+    logger.info("SAM2 segment_video: %d frames, %d click points", frames.shape[0], len(click_points))
 
     frames = _preprocess_frames(frames)
     N, C, H, W = frames.shape
@@ -231,34 +233,29 @@ def segment_video(
         logger.warning("segment_video: received empty frames tensor.")
         return torch.zeros(0, 1, 1, 1, dtype=torch.float32)
 
-    # Normalize coordinates to [0, 1]
-    norm_clicks = _normalize_coords(click_points, H, W)
-
-    predictor = _get_sam3_predictor(dev)
+    predictor = _get_sam2_predictor(dev)
 
     try:
-        masks = _run_sam3_inference(predictor, frames, norm_clicks, dev)
+        masks = _run_sam2_inference(predictor, frames, click_points, H, W, dev)
     except Exception as exc:
-        logger.error("SAM3 inference failed: %s", exc)
-        # Fallback: return all-ones masks
+        logger.error("SAM2 inference failed: %s", exc)
         masks = torch.ones(N, 1, H, W, dtype=torch.float32, device=dev)
         logger.warning("Using fallback all-ones masks.")
 
-    # Generate 4-layer SVG mask data
     _generate_svg_mask_layers(masks)
 
     if dev.type == "cuda":
         torch.cuda.synchronize(dev)
 
-    logger.info("SAM3 segment_video: output masks shape %s", masks.shape)
+    logger.info("SAM2 segment_video: output masks shape %s", masks.shape)
     return masks
 
 
-def _get_sam3_predictor(device: torch.device) -> Any:
-    """Load and cache SAM3 video predictor singleton."""
+def _get_sam2_predictor(device: torch.device) -> Any:
+    """Load and cache SAM2.1 video predictor singleton."""
     global _MODEL_CACHE, _CACHE_LOCK
 
-    cache_key = f"sam3_video:{device}"
+    cache_key = f"sam2_video:{device}"
     if cache_key in _MODEL_CACHE:
         return _MODEL_CACHE[cache_key]
 
@@ -267,201 +264,105 @@ def _get_sam3_predictor(device: torch.device) -> Any:
             return _MODEL_CACHE[cache_key]
 
         try:
-            from sam3.model_builder import build_sam3_video_model
+            from sam2.build_sam import build_sam2_video_predictor
 
-            model_path = "/models/sam3/sam3.safetensors"
-            logger.info("Loading SAM3 model from %s ...", model_path)
+            checkpoint = "/models/sam2/sam2.1_hiera_large.pt"
+            model_cfg = "sam2.1_hiera_l.yaml"
+            logger.info("Loading SAM2.1 from %s ...", checkpoint)
 
-            predictor = build_sam3_video_model(
-                model_path=model_path,
-                device=str(device),
+            predictor = build_sam2_video_predictor(
+                model_cfg, checkpoint, device=str(device),
             )
 
-            # Move to device if not already there
-            if hasattr(predictor, "to"):
-                predictor.to(device)
-            if hasattr(predictor, "eval"):
-                predictor.eval()
-
             _MODEL_CACHE[cache_key] = predictor
-            logger.info("SAM3 model loaded and cached successfully.")
+            logger.info("SAM2.1 model loaded and cached successfully.")
             return predictor
 
         except FileNotFoundError:
-            logger.error("SAM3 model not found at %s. Using dummy predictor.", model_path)
-            predictor = _DummySAM3Predictor(device)
+            logger.error("SAM2 checkpoint not found at %s. Using dummy predictor.", checkpoint)
+            predictor = _DummySAM2Predictor(device)
             _MODEL_CACHE[cache_key] = predictor
             return predictor
         except ImportError as exc:
-            logger.error("sam3 package not installed: %s. Using dummy predictor.", exc)
-            predictor = _DummySAM3Predictor(device)
+            logger.error("sam2 package not installed: %s. Using dummy predictor.", exc)
+            predictor = _DummySAM2Predictor(device)
             _MODEL_CACHE[cache_key] = predictor
             return predictor
 
 
-class _DummySAM3Predictor:
-    """Fallback predictor when SAM3 is unavailable; returns all-ones masks."""
+class _DummySAM2Predictor:
+    """Fallback predictor when SAM2 is unavailable; returns all-ones masks."""
 
     def __init__(self, device: torch.device):
         self.device = device
 
-    def __call__(self, frames: torch.Tensor, click_points: list) -> torch.Tensor:
-        N, _, H, W = frames.shape
-        return torch.ones(N, 1, H, W, dtype=torch.float32, device=self.device)
-
-    def eval(self) -> None:
+    def init_state(self, video_path: str) -> None:
         pass
 
-    def to(self, _device: torch.device) -> "_DummySAM3Predictor":
-        self.device = _device
-        return self
+    def add_new_points_or_box(self, *args, **kwargs):
+        return (0, [1], torch.ones(1, 1, 256, 256, device=self.device))
+
+    def add_new_points(self, *args, **kwargs):
+        return (None, [1], torch.ones(1, 1, 256, 256, device=self.device), torch.ones(1, 1, 256, 256, device=self.device))
+
+    def propagate_in_video(self, *args, **kwargs):
+        yield 0, [1], torch.ones(1, 1, 256, 256, device=self.device)
+        yield 1, [1], torch.ones(1, 1, 256, 256, device=self.device)
+
+    def reset_state(self, *args, **kwargs) -> None:
+        pass
 
 
-def _run_sam3_inference(
+def _run_sam2_inference(
     predictor: Any,
     frames: torch.Tensor,
-    norm_clicks: List[Tuple[float, float, int]],
+    click_points: List[Tuple[float, float, int]],
+    H: int,
+    W: int,
     device: torch.device,
 ) -> torch.Tensor:
-    """Execute SAM3 video inference on the frame sequence."""
-    N, C, H, W = frames.shape
+    """Execute SAM2.1 video inference on the frame sequence."""
+    N = frames.shape[0]
+    is_dummy = isinstance(predictor, _DummySAM2Predictor)
 
-    if isinstance(predictor, _DummySAM3Predictor):
-        return predictor(frames, norm_clicks)
+    if is_dummy:
+        return torch.ones(N, 1, H, W, dtype=torch.float32, device=device)
 
-    # SAM3 expects a list of prompts per frame
-    # Build prompt dict: {frame_idx: click coords}
-    prompts: Dict[int, Dict[str, Any]] = {}
-    for x, y, label in norm_clicks:
-        for frame_idx in range(N):
-            prompts.setdefault(frame_idx, {"point_coords": [], "point_labels": []})
-            prompts[frame_idx]["point_coords"].append([x, y])
-            prompts[frame_idx]["point_labels"].append(label)
-
-    # Convert to SAM3 format
-    input_points: List[Optional[np.ndarray]] = [None] * N
-    input_labels: List[Optional[np.ndarray]] = [None] * N
-    for idx, prompt in prompts.items():
-        input_points[idx] = np.array(prompt["point_coords"], dtype=np.float32)
-        input_labels[idx] = np.array(prompt["point_labels"], dtype=np.int32)
-
-    with torch.no_grad():
-        try:
-            # SAM3 typical inference call
-            masks_out = predictor(
-                frames,
-                points=input_points,
-                labels=input_labels,
-            )
-        except TypeError:
-            # Alternative API: predictor.set_image + predictor.predict
-            masks_list = []
-            for i in range(N):
-                predictor.set_image(frames[i])
-                pts = input_points[i] if input_points[i] is not None else np.zeros((0, 2), dtype=np.float32)
-                lbls = input_labels[i] if input_labels[i] is not None else np.zeros((0,), dtype=np.int32)
-                m, _, _ = predictor.predict(
-                    point_coords=pts,
-                    point_labels=lbls,
-                    multimask_output=False,
-                )
-                if isinstance(m, np.ndarray):
-                    m = torch.from_numpy(m).to(device)
-                masks_list.append(m)
-            masks_out = torch.stack(masks_list, dim=0)
-
-    # Ensure output is (N, 1, H, W)
-    if isinstance(masks_out, np.ndarray):
-        masks_out = torch.from_numpy(masks_out).to(device)
-
-    if masks_out.ndim == 3:
-        masks_out = masks_out.unsqueeze(1)  # (N, H, W) → (N, 1, H, W)
-    elif masks_out.ndim == 5:
-        # (N, num_masks, 1, H, W) → take first mask
-        masks_out = masks_out[:, 0, ...]
-
-    # Resize if needed
-    if masks_out.shape[-2:] != (H, W):
-        masks_out = F.interpolate(masks_out, size=(H, W), mode="bilinear", align_corners=False)
-
-    masks_out = _ensure_float32(masks_out)
-    return masks_out.to(device)
-
-
-def _generate_svg_mask_layers(masks: torch.Tensor) -> None:
-    """
-    Generate 4-layer SVG mask data from binary masks and store as module attribute.
-    Layers:
-      - foreground:  main subject (erosion)
-      - feather:     soft transition zone (dilation - erosion)
-      - detail:      fine boundary detail (gradient magnitude)
-      - semitrans:   semi-transparent outer region (dilation * 2 - dilation)
-    """
-    global _SVG_MASK_DATA
-
-    N = masks.shape[0]
-    masks_np = masks.cpu().squeeze(1).numpy()  # (N, H, W)
-
-    _SVG_MASK_DATA = {
-        "foreground": [],
-        "feather": [],
-        "detail": [],
-        "semitrans": [],
-        "frame_count": N,
-    }
-
+    import tempfile, os, cv2
+    tmpdir = tempfile.mkdtemp(prefix="sam2_frames_")
     try:
-        import cv2
-    except ImportError:
-        logger.warning("cv2 not available for SVG mask layer generation; storing raw masks only.")
-        _SVG_MASK_DATA["foreground"] = [m for m in masks_np]
-        _SVG_MASK_DATA["feather"] = [np.zeros_like(m) for m in masks_np]
-        _SVG_MASK_DATA["detail"] = [np.zeros_like(m) for m in masks_np]
-        _SVG_MASK_DATA["semitrans"] = [np.zeros_like(m) for m in masks_np]
-        return
+        for i in range(N):
+            img = (frames[i].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+            cv2.imwrite(os.path.join(tmpdir, f"{i:05d}.jpg"), img)
 
-    for i in range(N):
-        mask = (masks_np[i] * 255).astype(np.uint8)
+        with torch.inference_mode(), torch.autocast(str(device), dtype=torch.bfloat16):
+            state = predictor.init_state(video_path=tmpdir)
 
-        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+            for x, y, label in click_points:
+                predictor.add_new_points_or_box(
+                    state, frame_idx=0, obj_id=1,
+                    points=[[x, y]], labels=[label],
+                )
 
-        # Foreground: eroded mask
-        eroded = cv2.erode(mask, kernel_small, iterations=1)
-        _SVG_MASK_DATA["foreground"].append(eroded.astype(np.float32) / 255.0)
+            masks = torch.zeros(N, 1, H, W, dtype=torch.float32, device=device)
+            for frame_idx, obj_ids, out_masks in predictor.propagate_in_video(state):
+                if 1 in obj_ids and out_masks is not None:
+                    idx = obj_ids.index(1)
+                    m = out_masks[idx]
+                    if m.ndim == 2:
+                        m = m.unsqueeze(0)
+                    m = m[:1].float()
+                    if m.shape[-2:] != (H, W):
+                        m = F.interpolate(m.unsqueeze(0), size=(H, W), mode="bilinear").squeeze(0)
+                    masks[frame_idx] = m.clamp(0, 1)
 
-        # Dilated for feather
-        dilated = cv2.dilate(mask, kernel_medium, iterations=1)
-        feather = cv2.subtract(dilated, eroded)
-        _SVG_MASK_DATA["feather"].append(feather.astype(np.float32) / 255.0)
+            predictor.reset_state(state)
 
-        # Detail: gradient magnitude on mask boundary
-        grad_x = cv2.Sobel(mask, cv2.CV_32F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(mask, cv2.CV_32F, 0, 1, ksize=3)
-        detail = np.sqrt(grad_x ** 2 + grad_y ** 2)
-        detail = detail / (detail.max() + 1e-8)
-        _SVG_MASK_DATA["detail"].append(detail)
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
-        # Semitrans: outer ring
-        dilated2 = cv2.dilate(mask, kernel_large, iterations=1)
-        semitrans = cv2.subtract(dilated2, dilated)
-        _SVG_MASK_DATA["semitrans"].append(semitrans.astype(np.float32) / 255.0)
-
-    logger.info(
-        "SVG mask layers generated: foreground=%d, feather=%d, detail=%d, semitrans=%d",
-        len(_SVG_MASK_DATA["foreground"]),
-        len(_SVG_MASK_DATA["feather"]),
-        len(_SVG_MASK_DATA["detail"]),
-        len(_SVG_MASK_DATA["semitrans"]),
-    )
-
-
-def get_svg_mask_data() -> Dict[str, Any]:
-    """Return the 4-layer SVG mask data generated by segment_video."""
-    global _SVG_MASK_DATA
-    return _SVG_MASK_DATA
-
+    return masks
 
 # ===================================================================
 # 03 — MediaPipe 2D Pose Detection + Heatmap

@@ -2,7 +2,7 @@
 
 输入:
   - 01 原始 30fps 帧
-  - 02 Mask (来自 SAM3)
+  - 02 Mask (来自 SAM2.1)
   - 03 Pose 热力图 (来自 MediaPipe)
   - 04 Depth 深度图 (来自 MotionBERT)
 

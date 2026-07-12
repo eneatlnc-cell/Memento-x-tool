@@ -4,7 +4,7 @@ Memento 08 — Layered Lighting/Color Fusion Node (无冗余背景)
 
 输入:
   - flow_aligned_dir: 07 光流矫正帧 (来自 RAFT 矫正，已保留背景)
-  - mask_dir:         02 分层遮罩 (来自 SAM3，4 层 SVG mask)
+  - mask_dir:         02 分层遮罩 (来自 SAM2.1，4 层 SVG mask)
   - depth_dir:        04 深度图 (来自 MotionBERT)
 
 说明:

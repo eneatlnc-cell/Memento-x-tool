@@ -9,7 +9,7 @@ IC-LoRA 通过 LoraPathStrengthAndSDOps 原生加载，无需 peft。
 
 控制信号来源（8路输入）:
   - 01_frames_dir      → 来自 01 原始 30fps 帧
-  - 02_mask_dir        → 来自 02 SAM3 视频分割（人物 Mask）
+  - 02_mask_dir        → 来自 02 SAM2.1 视频分割（人物 Mask）
   - 03_heatmap_dir     → 来自 03 MediaPipe 2D 骨骼热力图（Pose 控制）
   - 04_depth_dir       → 来自 04 MotionBERT 深度图（Depth 控制）
   - 05_control_pack_dir → 来自 05 对齐控制（Canny/Distance/Temporal 控制包）
@@ -72,7 +72,7 @@ except ImportError as e:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 CONTROL_SOURCES = (
-    "Mask            → 来自 02 SAM3 视频分割 (人物区域)\n"
+    "Mask            → 来自 02 SAM2.1 视频分割 (人物区域)\n"
     "Pose (Heatmap)  → 来自 03 MediaPipe 2D 骨骼热力图\n"
     "Depth           → 来自 04 MotionBERT 深度图\n"
     "Canny/Distance  → 来自 05 对齐控制 (Canny边缘 + Distance距离图)\n"
@@ -561,7 +561,7 @@ class MementoLTX:
 
     8路输入信号:
       - 01 原始帧 (背景保持)
-      - 02 Mask (来自 SAM3)
+      - 02 Mask (来自 SAM2.1)
       - 03 Pose 热力图 (来自 MediaPipe)
       - 04 Depth 深度图 (来自 MotionBERT)
       - 05 Canny/Distance/Temporal 控制包 (来自 05 对齐)
