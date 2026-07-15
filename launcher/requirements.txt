@@ -1,4 +1,4 @@
-# Memento Launcher v2.0 依赖
+# Memento Launcher v2.1 依赖
 # 安装: pip install -r requirements.txt
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
@@ -6,3 +6,4 @@ docker>=7.0.0
 pystray>=0.19.0
 Pillow>=10.0.0
 requests>=2.28.0
+huggingface_hub>=0.20.0

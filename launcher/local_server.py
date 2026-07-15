@@ -1,7 +1,7 @@
 """Memento 启动器 — 本地控制服务 (FastAPI)
 
 Web 端入口：127.0.0.1:8189
-提供容器管理、状态查询、日志流式输出的 REST API
+提供容器管理、状态查询、日志流式输出、模型下载管理的 REST API
 """
 import logging
 import threading
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from .config import LauncherConfig, load_config, save_config
 from .docker_manager import DockerManager
 from .cloud_client import CloudClient
+from .model_downloader import ModelDownloader
 
 logger = logging.getLogger("memento.server")
 
@@ -25,16 +26,19 @@ _state: dict = {
     "cfg": None,
     "docker": None,
     "cloud": None,
+    "models": None,
     "install_progress": {"status": "", "progress": 0.0},
     "log_buffer": [],  # 最近 200 行日志
 }
 
 
-def setup_state(cfg: LauncherConfig, docker_mgr: DockerManager, cloud: CloudClient):
+def setup_state(cfg: LauncherConfig, docker_mgr: DockerManager, cloud: CloudClient,
+                models: ModelDownloader = None):
     """注入全局状态"""
     _state["cfg"] = cfg
     _state["docker"] = docker_mgr
     _state["cloud"] = cloud
+    _state["models"] = models or ModelDownloader(cfg.workspace + "/models")
 
 
 # ── 日志收集 ──
@@ -114,13 +118,16 @@ app.add_middleware(
 cfg = lambda: _state["cfg"]
 docker = lambda: _state["docker"]
 cloud = lambda: _state["cloud"]
+models = lambda: _state["models"]
 
 
-# ── 端点 ──
+# ═══════════════════════════════════════════════════════════
+# 状态端点
+# ═══════════════════════════════════════════════════════════
 
 @app.get("/status", response_model=StatusResponse)
 async def get_status():
-    """获取启动器状态"""
+    """获取启动器综合状态"""
     c = cfg()
     d = docker()
     gpu = c.gpu_info
@@ -163,6 +170,10 @@ async def get_health():
     )
 
 
+# ═══════════════════════════════════════════════════════════
+# 容器管理端点
+# ═══════════════════════════════════════════════════════════
+
 @app.post("/install")
 async def install():
     """触发镜像拉取和容器启动"""
@@ -174,7 +185,6 @@ async def install():
 
     c.status = "installing"
 
-    # 镜像拉取
     def on_progress(msg: str, progress: float):
         _state["install_progress"] = {"status": msg, "progress": progress}
 
@@ -185,13 +195,11 @@ async def install():
             c.status = "error"
             raise HTTPException(500, "镜像拉取失败")
 
-    # 启动容器
     logger.info("启动容器...")
     if not d.start_container():
         c.status = "error"
         raise HTTPException(500, "容器启动失败")
 
-    # 等待端口就绪
     time.sleep(5)
     if d.check_port():
         c.status = "running"
@@ -237,6 +245,10 @@ async def stop_container():
         raise HTTPException(500, "容器停止失败")
 
 
+# ═══════════════════════════════════════════════════════════
+# 日志端点
+# ═══════════════════════════════════════════════════════════
+
 @app.get("/logs")
 async def get_logs(lines: int = Query(default=100, le=200)):
     """获取最近日志"""
@@ -278,6 +290,10 @@ async def install_progress():
     return _state["install_progress"]
 
 
+# ═══════════════════════════════════════════════════════════
+# 配置端点
+# ═══════════════════════════════════════════════════════════
+
 @app.post("/config")
 async def update_config(update: ConfigUpdate):
     """更新配置并持久化"""
@@ -312,3 +328,86 @@ async def get_gpu_info():
     """获取 GPU 详情"""
     d = docker()
     return d.get_gpu_info()
+
+
+# ═══════════════════════════════════════════════════════════
+# 模型管理端点
+# ═══════════════════════════════════════════════════════════
+
+@app.get("/models/status")
+async def get_models_status():
+    """获取所有模型状态（自动 + 手动）"""
+    m = models()
+    return m.get_all_status()
+
+
+@app.get("/models/progress")
+async def get_models_progress():
+    """获取当前下载进度"""
+    m = models()
+    return m.get_progress()
+
+
+@app.post("/models/download")
+async def start_models_download():
+    """触发自动下载（异步）"""
+    m = models()
+
+    if m.is_downloading():
+        raise HTTPException(409, "模型下载已在运行中")
+
+    # 检查是否有需要下载的模型
+    status = m.get_all_status()
+    if status["auto_ready"]:
+        return {"status": "ok", "message": "所有自动下载模型已就绪", "skipped": True}
+
+    # 异步启动下载
+    def on_progress(model_name, status, progress):
+        logger.info(f"模型下载进度: {model_name} [{status}] {progress:.0%}")
+
+    m.download_async(callback=on_progress)
+    return {"status": "ok", "message": "模型下载已启动", "total": status["auto_total_gb"]}
+
+
+@app.post("/models/cancel")
+async def cancel_models_download():
+    """取消下载"""
+    m = models()
+    m.cancel_download()
+    return {"status": "ok", "message": "下载已取消"}
+
+
+@app.get("/models/manual")
+async def get_manual_guide():
+    """获取手动下载模型清单及详细步骤"""
+    m = models()
+    return {
+        "manuals": m.get_manual_guide(),
+        "model_dir": str(m.model_dir),
+        "dir_tree": m.get_dir_tree(),
+    }
+
+
+@app.get("/models/dir-tree")
+async def get_models_dir_tree():
+    """获取模型目录结构"""
+    m = models()
+    return {"dir_tree": m.get_dir_tree()}
+
+
+@app.post("/models/hf-token")
+async def set_hf_token(token: str = Query(...)):
+    """设置 HuggingFace Token 用于下载 gated 模型"""
+    if not token.startswith("hf_"):
+        raise HTTPException(400, "Token 格式无效，应以 hf_ 开头")
+
+    import os
+    os.environ["HF_TOKEN"] = token
+
+    # 写入文件持久化
+    token_file = cfg().workspace + "/hf_token.txt"
+    with open(token_file, "w") as f:
+        f.write(token)
+
+    logger.info("HF Token 已设置，将尝试下载 IC-LoRA Ingredients")
+    return {"status": "ok", "message": "HF Token 已设置，可重新触发下载"}
