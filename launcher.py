@@ -34,7 +34,7 @@ def get_args():
     parser.add_argument("--token", default=os.getenv("MEMENTO_USER_TOKEN", ""))
     parser.add_argument("--image", default=os.getenv("MEMENTO_IMAGE", DEFAULT_IMAGE))
     parser.add_argument("--workspace", default=os.getenv("MEMENTO_WORKSPACE", os.path.expanduser("~/.memento")))
-    parser.add_argument("--port", default=os.getenv("MEMENTO_PORT", "8188"))
+    parser.add_argument("--port", default=os.getenv("MEMENTO_PORT", "8189"))
     parser.add_argument("--gpu", default=os.getenv("CUDA_VISIBLE_DEVICES", "0"))
     return parser.parse_args()
 
