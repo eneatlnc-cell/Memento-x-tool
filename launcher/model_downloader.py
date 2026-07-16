@@ -68,11 +68,11 @@ AUTO_MODELS: list[ModelItem] = [
         size_mb=654,
         size_display="654 MB",
         dir_name="iclora",
-        files=["ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"],
+        files=["ltx-2.3-22b-ic-lora-union-control-0.9.safetensors"],
         reason="",
         hf_repo="Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control",
-        hf_file="ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors",
-        download_url="https://hf-mirror.com/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control/resolve/main/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors",
+        hf_file="ltx-2.3-22b-ic-lora-union-control-0.9.safetensors",
+        download_url="https://hf-mirror.com/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control/resolve/main/ltx-2.3-22b-ic-lora-union-control-0.9.safetensors",
     ),
     ModelItem(
         name="LTX-2.3 FP8 主模型",
@@ -143,7 +143,7 @@ MANUAL_MODELS: list[ModelItem] = [
         dir_name="iclora",
         files=["ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors"],
         reason="需要 HuggingFace 账号授权（gated repository）",
-        download_url="https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients",
+        download_url="https://hf-mirror.com/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients",
         hf_repo="Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients",
         hf_file="ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
         hf_token_required=True,
@@ -269,7 +269,7 @@ class ModelDownloader:
     def _download_hf(self, model: ModelItem) -> bool:
         """通过 huggingface_hub + hf-mirror 下载"""
         try:
-            os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
+            os.environ["HF_ENDPOINT"] = HF_MIRROR
             from huggingface_hub import hf_hub_download, snapshot_download
 
             if model.hf_file:

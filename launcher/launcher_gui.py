@@ -204,7 +204,7 @@ class LauncherApp:
 
         def download():
             try:
-                os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
                 from huggingface_hub import hf_hub_download
                 logger.info("尝试下载 IC-LoRA Ingredients（使用 HF Token）...")
                 hf_hub_download(

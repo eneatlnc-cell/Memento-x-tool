@@ -84,7 +84,7 @@
 
 **步骤**：
 1. 打开 https://huggingface.co/join 注册账号（如已有则跳过）
-2. 打开 https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients
+2. 打开 https://hf-mirror.com/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients
 3. 点击页面上的 **"Agree and access repository"** 按钮
 4. 打开 https://huggingface.co/settings/tokens
 5. 点击 **"New token"** → 选择 **Read** 权限 → 创建

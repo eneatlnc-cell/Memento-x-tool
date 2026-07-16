@@ -17,7 +17,7 @@ MAX_RETRIES=3
 LOG_FILE="$MODEL_DIR/download.log"
 
 # 国内镜像源
-HF_ENDPOINT="https://hf-mirror.com"
+export HF_ENDPOINT="https://hf-mirror.com"
 
 mkdir -p "$MODEL_DIR"/{sam2,mediapipe,pose,ltx,iclora,raft}
 mkdir -p "$MODEL_DIR/manual"

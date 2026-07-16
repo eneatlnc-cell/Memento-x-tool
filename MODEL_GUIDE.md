@@ -95,7 +95,7 @@ scp sam2.1_hiera_large.pt user@gpu-server:~/.memento/workspace/models/sam2/
    https://huggingface.co/join
 
 2. 打开模型页面，点击 **"Agree and access repository"**：
-   https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients
+   https://hf-mirror.com/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients
 
 3. 创建 Access Token：
    https://huggingface.co/settings/tokens
