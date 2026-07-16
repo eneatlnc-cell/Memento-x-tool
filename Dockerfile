@@ -20,16 +20,16 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
     && pip install --upgrade pip
 
 # ComfyUI
-RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-WORKDIR /opt/ComfyUI
+RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git /root/data/ComfyUI
+WORKDIR /root/data/ComfyUI
 RUN pip install --no-cache-dir -r requirements.txt
 
 # SAM2.1（Apache 2.0，完全开放）
-RUN git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2 \
-    && pip install --no-cache-dir -e /opt/sam2
+RUN git clone --depth 1 https://github.com/facebookresearch/sam2.git /root/data/sam2 \
+    && pip install --no-cache-dir -e /root/data/sam2
 
 # Memento 工具链
-WORKDIR /opt/memento-tool
+WORKDIR /root/data/memento-tool
 COPY . .
 
 # 模型下载

@@ -184,7 +184,7 @@ scp sam2.1_hiera_large.pt user@gpu-server:~/.memento/workspace/models/sam2/
 
 ### 核心原则
 
-**`~/.memento/workspace/models/` 目录会被自动挂载到 Docker 容器内的 `/opt/models/`。**
+**`~/.memento/workspace/models/` 目录会被自动挂载到 Docker 容器内的 `/root/data/models/`。**
 
 所以你只需要把文件放到正确的位置，启动器会自动识别。
 

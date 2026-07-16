@@ -6,7 +6,7 @@
 
 用法:
   python launcher_cli.py --token YOUR_TOKEN
-  python launcher_cli.py --token YOUR_TOKEN --comfyui /opt/ComfyUI --port 8188
+  python launcher_cli.py --token YOUR_TOKEN --comfyui /root/data/ComfyUI --port 8188
 
 功能:
   1. 检查 GPU 环境
@@ -31,9 +31,9 @@ from pathlib import Path
 
 # ── 默认值 ──
 DEFAULT_API_URL = "http://118.31.189.101:8000/api/v1"
-DEFAULT_COMFYUI_DIR = "/opt/ComfyUI"
+DEFAULT_COMFYUI_DIR = "/root/data/ComfyUI"
 DEFAULT_PORT = 8188
-DEFAULT_MODEL_DIR = "/opt/models"
+DEFAULT_MODEL_DIR = "/root/data/models"
 HEARTBEAT_INTERVAL = 30
 
 # ── 日志 ──
@@ -395,7 +395,7 @@ def get_args():
         epilog="""
 示例:
   python launcher_cli.py --token YOUR_TOKEN
-  python launcher_cli.py --token YOUR_TOKEN --comfyui /opt/ComfyUI --model-dir /opt/models
+  python launcher_cli.py --token YOUR_TOKEN --comfyui /root/data/ComfyUI --model-dir /root/data/models
   python launcher_cli.py --token YOUR_TOKEN --api-url http://memento.asia/api/v1
         """,
     )

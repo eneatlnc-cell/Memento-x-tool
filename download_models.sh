@@ -12,7 +12,7 @@
 # ============================================================
 set -uo pipefail
 
-MODEL_DIR="${MODEL_DIR:-/opt/models}"
+MODEL_DIR="${MODEL_DIR:-/root/data/models}"
 MAX_RETRIES=3
 LOG_FILE="$MODEL_DIR/download.log"
 
@@ -105,9 +105,9 @@ print('RAFT OK')
 
 # 6. SAM2 源码
 log "━━━ 6/6 SAM2 源码 ━━━"
-if [ ! -d "/opt/sam2" ]; then
-    retry "SAM2源码" git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2 2>/dev/null || true
-    pip install -e /opt/sam2 -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || pip install --quiet -e /opt/sam2 -i https://pypi.tuna.tsinghua.edu.cn/simple || true
+if [ ! -d "/root/data/sam2" ]; then
+    retry "SAM2源码" git clone --depth 1 https://github.com/facebookresearch/sam2.git /root/data/sam2 2>/dev/null || true
+    pip install -e /root/data/sam2 -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || pip install --quiet -e /root/data/sam2 -i https://pypi.tuna.tsinghua.edu.cn/simple || true
 fi
 
 # ═══════════════════════════════════════════════════════════

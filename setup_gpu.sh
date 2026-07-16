@@ -9,8 +9,8 @@ set -uo pipefail
 PIP_MIRROR="https://mirrors.aliyun.com/pypi/simple/"
 HF_MIRROR="https://hf-mirror.com"
 GH_MIRROR="https://gitclone.com/github.com"    # GitHub 镜像
-COMFYUI_DIR="/opt/ComfyUI"
-TOOL_DIR="/opt/memento-tool"
+COMFYUI_DIR="/root/data/ComfyUI"
+TOOL_DIR="/root/data/memento-tool"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
