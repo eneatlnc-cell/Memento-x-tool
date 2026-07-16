@@ -19,6 +19,10 @@ LOG_FILE="$MODEL_DIR/download.log"
 # 国内镜像源
 export HF_ENDPOINT="https://hf-mirror.com"
 
+# pip 国内镜像（防止 pip install 走 pypi.org 海外，opencv-python/mediapipe 等包默认连接海外）
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+export PIP_TRUSTED_HOST="pypi.tuna.tsinghua.edu.cn"
+
 mkdir -p "$MODEL_DIR"/{sam2,mediapipe,pose,ltx,iclora,raft}
 mkdir -p "$MODEL_DIR/manual"
 
@@ -68,7 +72,7 @@ hf_hub_download('Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
 # 3. LTX-2.3 FP8 — 29GB，优先 ModelScope 国内 CDN
 log "━━━ 3/6 LTX-2.3 FP8 主模型 (29 GB) ━━━"
 log "  尝试 ModelScope 国内 CDN..."
-if command -v modelscope &>/dev/null || pip install --quiet --no-deps modelscope 2>/dev/null; then
+if command -v modelscope &>/dev/null || pip install --quiet --no-deps modelscope -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null; then
     retry "LTX-ModelScope" python3 -c "
 from modelscope.hub.snapshot_download import snapshot_download
 snapshot_download('Lightricks/LTX-2.3-fp8', local_dir='${MODEL_DIR}/ltx',
@@ -89,7 +93,7 @@ fi
 
 # 4. MediaPipe
 log "━━━ 4/6 MediaPipe ━━━"
-retry "MediaPipe" pip install --no-deps --quiet mediapipe 2>/dev/null || pip install --quiet mediapipe || true
+retry "MediaPipe" pip install --no-deps --quiet mediapipe -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || pip install --quiet mediapipe -i https://pypi.tuna.tsinghua.edu.cn/simple || true
 
 # 5. RAFT 光流
 log "━━━ 5/6 RAFT 光流模型 (~50 MB) ━━━"
@@ -103,7 +107,7 @@ print('RAFT OK')
 log "━━━ 6/6 SAM2 源码 ━━━"
 if [ ! -d "/opt/sam2" ]; then
     retry "SAM2源码" git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2 2>/dev/null || true
-    pip install -e /opt/sam2 2>/dev/null || pip install --quiet -e /opt/sam2 || true
+    pip install -e /opt/sam2 -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || pip install --quiet -e /opt/sam2 -i https://pypi.tuna.tsinghua.edu.cn/simple || true
 fi
 
 # ═══════════════════════════════════════════════════════════
