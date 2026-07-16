@@ -1,17 +1,20 @@
 """Memento 启动器 — 本地控制服务 (FastAPI)
 
 Web 端入口：127.0.0.1:8189
-提供容器管理、状态查询、日志流式输出、模型下载管理的 REST API
+提供：Web SPA 前端 + 容器管理 + 状态查询 + 日志流式输出 + 模型下载管理
 """
 import logging
+import os
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import LauncherConfig, load_config, save_config
@@ -95,7 +98,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Memento Launcher",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan,
 )
 
@@ -114,6 +117,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 cfg = lambda: _state["cfg"]
 docker = lambda: _state["docker"]
@@ -411,3 +415,38 @@ async def set_hf_token(token: str = Query(...)):
 
     logger.info("HF Token 已设置，将尝试下载 IC-LoRA Ingredients")
     return {"status": "ok", "message": "HF Token 已设置，可重新触发下载"}
+
+# ═══════════════════════════════════════════════════════════
+# Web SPA 前端托管（必须在所有 API 路由之后注册）
+# ═══════════════════════════════════════════════════════════
+
+def _get_web_dir() -> str:
+    """获取 web 前端构建产物目录"""
+    if getattr(sys, 'frozen', False):
+        return os.path.join(sys._MEIPASS, 'web', 'dist')
+    else:
+        return os.path.join(os.path.dirname(__file__), '..', 'web', 'dist')
+
+_WEB_DIR = _get_web_dir()
+_SPA_READY = os.path.exists(os.path.join(_WEB_DIR, 'index.html'))
+
+if _SPA_READY:
+    assets_dir = os.path.join(_WEB_DIR, 'assets')
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="spa_assets")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index():
+        return FileResponse(os.path.join(_WEB_DIR, 'index.html'))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        """SPA 回退：未匹配 API 路由的路径返回 index.html"""
+        file_path = os.path.join(_WEB_DIR, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(_WEB_DIR, 'index.html'))
+else:
+    @app.get("/", include_in_schema=False)
+    async def web_not_built():
+        return {"message": "Web 前端未构建，请运行: cd web && npm install && npm run build"}

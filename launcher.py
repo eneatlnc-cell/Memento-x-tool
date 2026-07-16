@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger("memento-launcher")
 
 # ── 默认值 ──
-DEFAULT_API_URL = "http://memento.asia/api/v1"
+DEFAULT_API_URL = "http://118.31.189.101:8000/api/v1"
 DEFAULT_IMAGE = "mementoweb/memento-tool:v1.0.0"
 
 

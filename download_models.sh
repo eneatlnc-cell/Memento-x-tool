@@ -103,7 +103,7 @@ print('RAFT OK')
 log "━━━ 6/6 SAM2 源码 ━━━"
 if [ ! -d "/opt/sam2" ]; then
     retry "SAM2源码" git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2 2>/dev/null || true
-    pip install --no-deps --quiet -e /opt/sam2 2>/dev/null || pip install --quiet -e /opt/sam2 || true
+    pip install -e /opt/sam2 2>/dev/null || pip install --quiet -e /opt/sam2 || true
 fi
 
 # ═══════════════════════════════════════════════════════════

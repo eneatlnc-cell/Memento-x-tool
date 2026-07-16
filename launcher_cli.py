@@ -30,7 +30,7 @@ import urllib.error
 from pathlib import Path
 
 # ── 默认值 ──
-DEFAULT_API_URL = "http://memento.asia/api/v1"
+DEFAULT_API_URL = "http://118.31.189.101:8000/api/v1"
 DEFAULT_COMFYUI_DIR = "/opt/ComfyUI"
 DEFAULT_PORT = 8188
 DEFAULT_MODEL_DIR = "/opt/models"

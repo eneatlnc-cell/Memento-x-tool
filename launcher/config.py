@@ -38,7 +38,7 @@ class LauncherConfig:
     status: str = "idle"  # idle/installing/running/error
     container_id: str = ""
     gpu_info: dict = field(default_factory=lambda: {"model": "unknown", "vram_gb": 0})
-    version: str = "2.0.0"
+    version: str = "2.1.0"
 
 
 def init_dirs():

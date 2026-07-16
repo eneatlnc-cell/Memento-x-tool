@@ -115,7 +115,7 @@ AUTO_MODELS: list[ModelItem] = [
         dir_name="sam2",
         files=[],
         reason="",
-        install_steps=["git clone https://github.com/facebookresearch/sam2.git /opt/sam2"],
+        install_steps=["git clone https://github.com/facebookresearch/sam2.git /opt/sam2", "pip install -e /opt/sam2"],
     ),
 ]
 

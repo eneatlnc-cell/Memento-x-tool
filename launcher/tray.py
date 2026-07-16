@@ -106,7 +106,7 @@ class SystemTray:
         import subprocess
         import os
 
-        log_file = Path(self.cfg.workspace) / "logs" / "launcher.log"
+        log_file = Path(self.cfg.workspace).parent / "logs" / "launcher.log"
         if log_file.exists():
             if sys.platform == "win32":
                 os.startfile(str(log_file))

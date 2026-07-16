@@ -76,8 +76,8 @@ const activePanel = ref('cloud')
 const comfyReady = ref(false)
 const cloudOnline = ref(false)
 const comfyUrl = ref('http://127.0.0.1:8188')
-const apiUrl = ref(localStorage.getItem('memento_api_url') || 'http://memento.asia/api/v1')
-const localUrl = ref('http://127.0.0.1:8189')
+const apiUrl = ref(localStorage.getItem('memento_api_url') || 'http://118.31.189.101:8000/api/v1')
+const localUrl = ref(window.location.port === '8189' ? '' : 'http://127.0.0.1:8189')
 const comfyFrame = ref(null)
 
 let pollingTimer = null
