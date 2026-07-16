@@ -17,7 +17,7 @@ MAX_RETRIES=3
 LOG_FILE="$MODEL_DIR/download.log"
 
 # 国内镜像源
-HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+HF_ENDPOINT="https://hf-mirror.com"
 
 mkdir -p "$MODEL_DIR"/{sam2,mediapipe,pose,ltx,iclora,raft}
 mkdir -p "$MODEL_DIR/manual"
@@ -46,7 +46,7 @@ log "═════════════════════════
 # 1. MotionBERT — 162MB，hf-mirror
 log "━━━ 1/6 MotionBERT 姿态估计 (162 MB) ━━━"
 retry "MotionBERT" python3 -c "
-import os; os.environ.setdefault('HF_ENDPOINT','${HF_ENDPOINT}')
+import os; os.environ['HF_ENDPOINT'] = '${HF_ENDPOINT}'
 from huggingface_hub import snapshot_download
 snapshot_download('walterzhu/MotionBERT', local_dir='${MODEL_DIR}/pose',
     local_dir_use_symlinks=False, resume_download=True)
@@ -58,12 +58,12 @@ retry "MotionBERT-wget" wget -q --show-progress --continue \
 # 2. IC-LoRA Union Control — 654MB，开放下载
 log "━━━ 2/6 IC-LoRA Union Control (654 MB) ━━━"
 retry "UnionControl" python3 -c "
-import os; os.environ.setdefault('HF_ENDPOINT','${HF_ENDPOINT}')
+import os; os.environ['HF_ENDPOINT'] = '${HF_ENDPOINT}'
 from huggingface_hub import hf_hub_download
 hf_hub_download('Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
-    'ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors',
+    'ltx-2.3-22b-ic-lora-union-control-0.9.safetensors',
     local_dir='${MODEL_DIR}/iclora', local_dir_use_symlinks=False, resume_download=True)
-" || true
+" 2>/dev/null || retry "UnionControl-wget" wget -q --show-progress --continue     -O "${MODEL_DIR}/iclora/ltx-2.3-22b-ic-lora-union-control-0.9.safetensors"     "${HF_ENDPOINT}/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control/resolve/main/ltx-2.3-22b-ic-lora-union-control-0.9.safetensors" || true
 
 # 3. LTX-2.3 FP8 — 29GB，优先 ModelScope 国内 CDN
 log "━━━ 3/6 LTX-2.3 FP8 主模型 (29 GB) ━━━"
@@ -80,11 +80,11 @@ fi
 if [ ! -f "$MODEL_DIR/ltx/ltx-2.3-22b-dev-fp8.safetensors" ]; then
     log "  ModelScope 不可用，改用 hf-mirror..."
     retry "LTX-HF" python3 -c "
-import os; os.environ.setdefault('HF_ENDPOINT','${HF_ENDPOINT}')
+import os; os.environ['HF_ENDPOINT'] = '${HF_ENDPOINT}'
 from huggingface_hub import hf_hub_download
 hf_hub_download('Lightricks/LTX-2.3-fp8', 'ltx-2.3-22b-dev-fp8.safetensors',
     local_dir='${MODEL_DIR}/ltx', local_dir_use_symlinks=False, resume_download=True)
-" || true
+" 2>/dev/null ||     retry "LTX-HF-wget" wget -q --show-progress --continue         -O "${MODEL_DIR}/ltx/ltx-2.3-22b-dev-fp8.safetensors"         "${HF_ENDPOINT}/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors" || true
 fi
 
 # 4. MediaPipe
