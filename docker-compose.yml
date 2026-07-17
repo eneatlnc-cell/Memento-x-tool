@@ -1,0 +1,28 @@
+# ============================================================
+# Memento ComfyUI — Docker Compose 部署
+# 用法:
+#   docker login registry-cn-huabei1-internal.ebcloud.com -u xxx -p xxx
+#   docker-compose up -d
+# 模型目录 /root/data/models 通过 volume 挂载，不会打进镜像
+# ============================================================
+
+services:
+  comfyui:
+    image: registry-cn-huabei1-internal.ebcloud.com/tenant-29013702/memento-comfyui:latest
+    container_name: memento-comfyui
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_ENDPOINT=https://hf-mirror.com
+    ports:
+      - "8188:8188"
+    volumes:
+      - /root/data/models:/root/data/models
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
