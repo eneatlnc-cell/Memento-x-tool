@@ -65,9 +65,9 @@ retry "UnionControl" python3 -c "
 import os; os.environ['HF_ENDPOINT'] = '${HF_ENDPOINT}'
 from huggingface_hub import hf_hub_download
 hf_hub_download('Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
-    'ltx-2.3-22b-ic-lora-union-control-0.9.safetensors',
+    'ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors',
     local_dir='${MODEL_DIR}/iclora', local_dir_use_symlinks=False, resume_download=True)
-" 2>/dev/null || retry "UnionControl-wget" wget -q --show-progress --continue     -O "${MODEL_DIR}/iclora/ltx-2.3-22b-ic-lora-union-control-0.9.safetensors"     "${HF_ENDPOINT}/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control/resolve/main/ltx-2.3-22b-ic-lora-union-control-0.9.safetensors" || true
+" 2>/dev/null || retry "UnionControl-wget" wget -q --show-progress --continue     -O "${MODEL_DIR}/iclora/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"     "${HF_ENDPOINT}/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control/resolve/main/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors" || true
 
 # 3. LTX-2.3 FP8 — 29GB，优先 ModelScope 国内 CDN
 log "━━━ 3/6 LTX-2.3 FP8 主模型 (29 GB) ━━━"
