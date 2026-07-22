@@ -403,7 +403,7 @@ def get_args():
                         help="Memento 用户 Token（从 Web 端获取）")
     parser.add_argument("--api-url", default=os.getenv("MEMENTO_API_URL", DEFAULT_API_URL),
                         help=f"云端 API 地址 (默认: {DEFAULT_API_URL})")
-    parser.add_argument("--comfyui", default=os.getenv("COMFYUI_DIR", DEFAULT_COMFYUI_DIR),
+    parser.add_argument("--comfyui", dest="comfyui_dir", default=os.getenv("COMFYUI_DIR", DEFAULT_COMFYUI_DIR),
                         help=f"ComfyUI 安装目录 (默认: {DEFAULT_COMFYUI_DIR})")
     parser.add_argument("--model-dir", default=os.getenv("MODEL_DIR", DEFAULT_MODEL_DIR),
                         help=f"模型文件目录 (默认: {DEFAULT_MODEL_DIR})")
