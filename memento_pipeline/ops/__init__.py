@@ -683,19 +683,29 @@ def _get_pose_lifter(device: torch.device) -> SimplePoseLifter:
         lifter.to(device)
         lifter.eval()
 
-        # Try to load pretrained weights
-        weight_path = "/models/motionbert/pose_lifter.pth"
-        try:
-            state = torch.load(weight_path, map_location=device, weights_only=True)
-            lifter.load_state_dict(state, strict=False)
-            logger.info("Loaded SimplePoseLifter weights from %s", weight_path)
-        except FileNotFoundError:
+        # Try to load pretrained weights（多候选路径，与节点 04 保持一致）
+        import os as _os
+        _candidate_paths = [
+            _os.path.join(_os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "pose", "motionbert_ft_h36m.pth"),
+            _os.path.expanduser("~/.memento/workspace/models/pose/motionbert_ft_h36m.pth"),
+            "/models/pose/motionbert_ft_h36m.pth",
+        ]
+        weight_path = next((p for p in _candidate_paths if _os.path.exists(p)), None)
+        if weight_path is None:
             logger.warning(
-                "Pretrained weights not found at %s. Using randomly initialized SimplePoseLifter.",
-                weight_path,
+                "MotionBERT 权重未找到，已搜索路径: %s. 使用随机初始化 SimplePoseLifter.",
+                _candidate_paths,
             )
-        except Exception as exc:
-            logger.warning("Failed to load pose lifter weights: %s. Using random init.", exc)
+        else:
+            try:
+                state = torch.load(weight_path, map_location=device, weights_only=False)
+                # MotionBERT checkpoint 可能是 {"model_pos": state_dict} 或纯 state_dict
+                if isinstance(state, dict) and "model_pos" in state:
+                    state = state["model_pos"]
+                lifter.load_state_dict(state, strict=False)
+                logger.info("Loaded MotionBERT weights from %s", weight_path)
+            except Exception as exc:
+                logger.warning("Failed to load MotionBERT weights from %s: %s. Using random init.", weight_path, exc)
 
         _MODEL_CACHE[cache_key] = lifter
         return lifter

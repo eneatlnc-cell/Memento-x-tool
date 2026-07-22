@@ -166,9 +166,14 @@ class DockerManager:
                 ports={f"{self.cfg.container_port}/tcp": self.cfg.container_port},
                 volumes={
                     self.cfg.workspace: {"bind": "/workspace", "mode": "rw"},
+                    # 模型目录单独挂载到容器内 /root/data/models（Dockerfile 约定路径）
+                    # 启动器把模型下载到 ~/.memento/workspace/models，容器内通过 /root/data/models 访问
+                    os.path.join(self.cfg.workspace, "models"): {"bind": "/root/data/models", "mode": "rw"},
                 },
                 environment={
                     "CUDA_VISIBLE_DEVICES": self.cfg.gpu_device,
+                    # 告知 ComfyUI 自定义节点模型根目录
+                    "COMFYUI_MODEL_DIR": "/root/data/models",
                 },
             )
 

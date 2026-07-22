@@ -25,7 +25,13 @@ logger = logging.getLogger(__name__)
 class MementoPose3D:
     """节点 4: 3D 归一化 — MotionBERT 2D→3D + Depth 深度图"""
 
-    CHECKPOINT_PATH = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "pose", "motionbert_ft_h36m.pth")
+    # 多候选路径：容器内 /root/data/models、宿主机 ~/.memento、本地直跑
+    _CANDIDATE_PATHS = [
+        os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "pose", "motionbert_ft_h36m.pth"),
+        os.path.expanduser("~/.memento/workspace/models/pose/motionbert_ft_h36m.pth"),
+        "/models/pose/motionbert_ft_h36m.pth",
+    ]
+    CHECKPOINT_PATH = next((p for p in _CANDIDATE_PATHS if os.path.exists(p)), _CANDIDATE_PATHS[0])
 
     # MediaPipe 33 → H36M 17 关键点映射
     MP_TO_H36M = {

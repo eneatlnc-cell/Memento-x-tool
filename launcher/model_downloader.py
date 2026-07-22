@@ -60,6 +60,8 @@ AUTO_MODELS: list[ModelItem] = [
         files=["motionbert_ft_h36m.pth"],
         reason="",
         hf_repo="walterzhu/MotionBERT",
+        hf_file="checkpoint/pose3d/MB_ft_h36m.pth",
+        # wget 会用 URL 末段作为文件名，显式指定到目标文件名避免下载成 MB_ft_h36m.pth
         download_url="https://hf-mirror.com/walterzhu/MotionBERT/resolve/main/checkpoint/pose3d/MB_ft_h36m.pth",
     ),
     ModelItem(
@@ -343,9 +345,34 @@ class ModelDownloader:
 
         # 策略 1: wget 直链下载（最快）
         if model.download_url and model.files:
-            dest = str(self.model_dir / model.dir_name / model.files[0])
+            target_name = model.files[0]
+            dest = str(self.model_dir / model.dir_name / target_name)
             self._progress[model.name]["message"] = "wget 直链下载中..."
             success = self._download_wget(model.download_url, dest, model.name)
+            # wget 用 -O 显式指定输出名，理论上 dest 已存在；若不存在则尝试重命名 URL 末段文件
+            if success and not os.path.exists(dest):
+                url_fname = model.download_url.rsplit("/", 1)[-1]
+                downloaded = str(self.model_dir / model.dir_name / url_fname)
+                if os.path.exists(downloaded) and url_fname != target_name:
+                    try:
+                        os.rename(downloaded, dest)
+                    except OSError as e:
+                        logger.warning(f"重命名失败 [{model.name}]: {e}")
+                        success = False
+
+        # 统一处理：下载后确保文件名与 files[0] 一致（wget/HF/ModelScope 下载的源文件名可能不同）
+        if success and model.files:
+            target_name = model.files[0]
+            target_path = self.model_dir / model.dir_name / target_name
+            if not target_path.exists():
+                # 在目标目录下找任意 .pth/.safetensors 文件，重命名为目标名
+                for f in (self.model_dir / model.dir_name).iterdir():
+                    if f.is_file() and f.suffix in (".pth", ".safetensors", ".bin") and f.name != target_name:
+                        try:
+                            f.rename(target_path)
+                            logger.info(f"  重命名 {f.name} → {target_name}")
+                        except OSError as e:
+                            logger.warning(f"  重命名失败: {e}")
 
         # 策略 2: ModelScope（LTX 大文件优先）
         if not success and model.ms_repo:
