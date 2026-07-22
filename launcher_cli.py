@@ -211,7 +211,7 @@ class ComfyUIManager:
         env["COMFYUI_MODEL_DIR"] = self.model_dir
 
         cmd = [
-            sys.executable, str(main_py),
+            "python3", str(main_py),
             "--listen", "0.0.0.0",
             "--port", str(self.port),
         ]

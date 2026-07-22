@@ -57,7 +57,7 @@ snapshot_download('walterzhu/MotionBERT', local_dir='${MODEL_DIR}/pose',
 " 2>/dev/null || \
 retry "MotionBERT-wget" wget -q --show-progress --continue \
     -O "$MODEL_DIR/pose/motionbert_ft_h36m.pth" \
-    "${HF_ENDPOINT}/walterzhu/MotionBERT/resolve/main/motionbert_ft_h36m.pth" || true
+    "${HF_ENDPOINT}/walterzhu/MotionBERT/resolve/main/checkpoint/pose3d/MB_ft_h36m.pth" || true
 
 # 2. IC-LoRA Union Control — 654MB，开放下载
 log "━━━ 2/6 IC-LoRA Union Control (654 MB) ━━━"

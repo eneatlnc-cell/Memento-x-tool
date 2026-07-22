@@ -60,7 +60,7 @@ AUTO_MODELS: list[ModelItem] = [
         files=["motionbert_ft_h36m.pth"],
         reason="",
         hf_repo="walterzhu/MotionBERT",
-        download_url="https://hf-mirror.com/walterzhu/MotionBERT/resolve/main/motionbert_ft_h36m.pth",
+        download_url="https://hf-mirror.com/walterzhu/MotionBERT/resolve/main/checkpoint/pose3d/MB_ft_h36m.pth",
     ),
     ModelItem(
         name="IC-LoRA Union Control",
