@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class MementoPose3D:
     """节点 4: 3D 归一化 — MotionBERT 2D→3D + Depth 深度图"""
 
-    CHECKPOINT_PATH = "/models/motionbert/motionbert_ft_h36m.pth"
+    CHECKPOINT_PATH = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "pose", "motionbert_ft_h36m.pth")
 
     # MediaPipe 33 → H36M 17 关键点映射
     MP_TO_H36M = {
@@ -78,9 +78,10 @@ class MementoPose3D:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"[MementoPose3D] 加载 MotionBERT 到 {device}...")
 
-        checkpoint = torch.load(cls.CHECKPOINT_PATH, map_location=device, weights_only=True)
+        checkpoint = torch.load(cls.CHECKPOINT_PATH, map_location=device, weights_only=False)
         model = SimplePoseLifter()
-        model.load_state_dict(checkpoint, strict=False)
+        state_dict = checkpoint.get("model_pos", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        model.load_state_dict(state_dict, strict=False)
         model.to(device)
         model.eval()
 
