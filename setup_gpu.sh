@@ -8,7 +8,7 @@ set -uo pipefail
 
 PIP_MIRROR="https://mirrors.aliyun.com/pypi/simple/"
 HF_MIRROR="https://hf-mirror.com"
-GH_MIRROR_COMFYUI="https://gitee.com/mirrors"   # ComfyUI Gitee 镜像
+GH_MIRROR_COMFYUI="https://mirror.ghproxy.com/https://github.com"   # ComfyUI GHProxy 镜像
 GH_MIRROR="https://gitclone.com/github.com"    # GitHub 镜像（备用）
 COMFYUI_DIR="/root/data/ComfyUI"
 TOOL_DIR="/root/data/memento-tool"
