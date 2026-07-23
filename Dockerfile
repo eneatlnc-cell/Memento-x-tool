@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --upgrade pip
 
 # ── ComfyUI ──
-RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git /root/data/ComfyUI
+RUN git clone --depth 1 https://gitee.com/mirrors/ComfyUI.git /root/data/ComfyUI
 WORKDIR /root/data/ComfyUI
 # 降级 transformers（清华镜像可能未同步最新版）
 RUN sed -i 's/transformers>=4.50.3/transformers>=4.49.0/' requirements.txt \

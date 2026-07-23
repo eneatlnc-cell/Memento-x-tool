@@ -8,7 +8,8 @@ set -uo pipefail
 
 PIP_MIRROR="https://mirrors.aliyun.com/pypi/simple/"
 HF_MIRROR="https://hf-mirror.com"
-GH_MIRROR="https://gitclone.com/github.com"    # GitHub 镜像
+GH_MIRROR_COMFYUI="https://gitee.com/mirrors"   # ComfyUI Gitee 镜像
+GH_MIRROR="https://gitclone.com/github.com"    # GitHub 镜像（备用）
 COMFYUI_DIR="/root/data/ComfyUI"
 TOOL_DIR="/root/data/memento-tool"
 
@@ -20,12 +21,12 @@ pip config set global.index-url "$PIP_MIRROR" 2>/dev/null || true
 pip config set global.trusted-host "mirrors.aliyun.com" 2>/dev/null || true
 pip install --quiet --upgrade pip
 
-# ── 2. 克隆 ComfyUI（走 gitclone 镜像）──
+# ── 2. 克隆 ComfyUI（走 Gitee 镜像）──
 log "2/6 克隆 ComfyUI..."
 if [ -d "$COMFYUI_DIR" ]; then
     log "ComfyUI 已存在，跳过"
 else
-    git clone --depth 1 "$GH_MIRROR/comfyanonymous/ComfyUI.git" "$COMFYUI_DIR" 2>&1 | tail -1
+    git clone --depth 1 "$GH_MIRROR_COMFYUI/ComfyUI.git" "$COMFYUI_DIR" 2>&1 | tail -1
 fi
 
 # ── 3. 安装 ComfyUI 依赖（--no-deps 避免重装 PyTorch）──
