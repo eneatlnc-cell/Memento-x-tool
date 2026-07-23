@@ -7,8 +7,8 @@ REM 前提: Node.js 18+ (用于构建 Web 前端)
 REM ============================================================
 
 echo [1/4] 安装 Python 依赖...
-pip install -r launcher/requirements.txt --break-system-packages
-pip install pyinstaller --break-system-packages
+pip install -r launcher/requirements.txt
+pip install pyinstaller
 
 echo [2/4] 构建 Web 前端...
 cd web

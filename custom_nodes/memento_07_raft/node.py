@@ -69,7 +69,7 @@ class RAFTModel:
     _model = None
     _device = None
 
-    RAFT_MODEL_PATH = "/models/raft/raft_large.pth"
+    RAFT_MODEL_PATH = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "raft", "raft_large.pth")
 
     def __new__(cls):
         if cls._instance is None:

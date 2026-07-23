@@ -367,8 +367,8 @@ def _load_ltx_pipeline(
     control_strength: float,
     ingredients_enabled: bool = True,
     ingredients_strength: float = 1.4,
-    main_model: str = "/models/ltx/ltx-2.3-22b-dev-fp8.safetensors",
-    iclora_dir: str = "/models/iclora/",
+    main_model: str = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "ltx", "ltx-2.3-22b-dev-fp8.safetensors"),
+    iclora_dir: str = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "iclora"),
 ) -> object:
     """Load or return cached ICLoraPipeline singleton.
 
@@ -711,7 +711,7 @@ def _load_raft_model() -> Tuple[object, torch.device]:
     start = time.time()
     logger.info("[sub.07] Loading RAFT Large model...")
 
-    raft_path = "/models/raft/raft_large.pth"
+    raft_path = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "raft", "raft_large.pth")
     if os.path.exists(raft_path):
         logger.info(f"[sub.07] Loading RAFT from local: {raft_path}")
         state_dict = torch.load(raft_path, map_location=device)

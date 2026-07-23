@@ -585,9 +585,9 @@ class MementoLTX:
     """
 
     # ── 模型路径 ──
-    MAIN_MODEL = "/models/ltx/ltx-2.3-22b-dev-fp8.safetensors"
-    ICLORA_UNION = "/models/iclora/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"
-    ICLORA_INGREDIENTS = "/models/iclora/ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors"
+    MAIN_MODEL = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "ltx", "ltx-2.3-22b-dev-fp8.safetensors")
+    ICLORA_UNION = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "iclora", "ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors")
+    ICLORA_INGREDIENTS = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "iclora", "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors")
 
     # 管线缓存: key=(control_mode, control_strength, ingredients_enabled, ingredients_strength) → pipeline 实例
     _pipeline_cache: Dict[Tuple[str, float, bool, float], object] = {}
@@ -635,7 +635,7 @@ class MementoLTX:
                     "tooltip": "角色 B 文本提示词（描述要生成的角色外观）",
                 }),
                 "08_metadata_json": ("STRING", {
-                    "default": "/workspace/metadata.json",
+                    "default": "/workspace/frames/metadata.json",
                     "multiline": False,
                     "tooltip": "原始视频元数据 JSON（fps, width, height, duration）",
                 }),

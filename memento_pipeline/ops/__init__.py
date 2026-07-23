@@ -24,6 +24,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,7 @@ def _get_sam2_predictor(device: torch.device) -> Any:
         try:
             from sam2.build_sam import build_sam2_video_predictor
 
-            checkpoint = "/models/sam2/sam2.1_hiera_large.pt"
+            checkpoint = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "sam2", "sam2.1_hiera_large.pt")
             model_cfg = "sam2.1_hiera_l.yaml"
             logger.info("Loading SAM2.1 from %s ...", checkpoint)
 
@@ -688,7 +689,7 @@ def _get_pose_lifter(device: torch.device) -> SimplePoseLifter:
         _candidate_paths = [
             _os.path.join(_os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "pose", "motionbert_ft_h36m.pth"),
             _os.path.expanduser("~/.memento/workspace/models/pose/motionbert_ft_h36m.pth"),
-            "/models/pose/motionbert_ft_h36m.pth",
+            os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "pose", "motionbert_ft_h36m.pth"),
         ]
         weight_path = next((p for p in _candidate_paths if _os.path.exists(p)), None)
         if weight_path is None:

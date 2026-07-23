@@ -33,7 +33,7 @@ except ImportError as e:
 class MementoSegment:
     """节点 2: 时序分割 — SAM2.1 像素级 Mask + 四层 SVG 遮罩"""
 
-    CHECKPOINT_PATH = "/models/sam2/sam2.1_hiera_large.pt"
+    CHECKPOINT_PATH = os.path.join(os.environ.get("COMFYUI_MODEL_DIR", "/root/data/models"), "sam2", "sam2.1_hiera_large.pt")
     MODEL_CFG = "sam2.1_hiera_l.yaml"
     _predictor = None
 
